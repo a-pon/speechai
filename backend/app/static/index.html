@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpeechAI — записи консультаций</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-row">
+      <div>
+        <h1><a href="/" class="logo-link">SpeechAI</a></h1>
+        <p>Анализ консультаций: транскрипция и оценка работы врача</p>
+      </div>
+      <div id="auth-bar" class="auth-bar" hidden></div>
+    </div>
+  </header>
+
+  <main>
+    <section id="login-section">
+      <h2>Вход в админку</h2>
+      <form id="login-form">
+        <label>Логин
+          <input type="text" name="username" required autocomplete="username">
+        </label>
+        <label>Пароль
+          <input type="password" name="password" required autocomplete="current-password">
+        </label>
+        <button type="submit">Войти</button>
+      </form>
+      <p id="login-status" class="status"></p>
+    </section>
+
+    <section id="upload-section" class="dev-only" hidden>
+      <h2>Загрузить запись</h2>
+      <p class="hint">Блок для разработки; в проде записи поступают с сервера автоматически.</p>
+      <form id="upload-form">
+        <label>Аудио (MP3)
+          <input type="file" name="file" accept=".mp3,.wav,.ogg,.opus,.m4a" required>
+        </label>
+        <label id="doctor-name-label">Врач
+          <input type="text" name="doctor_name" required placeholder="Иванов И.И.">
+        </label>
+        <label>Пациент
+          <input type="text" name="patient_name" required placeholder="Петрова А.">
+        </label>
+        <label>Дата консультации
+          <input type="date" name="consultation_date" required>
+        </label>
+        <button type="submit">Загрузить и обработать</button>
+      </form>
+      <p id="upload-status" class="status"></p>
+    </section>
+
+    <section id="records-section" hidden>
+      <h2>Записи</h2>
+      <table id="list-table">
+        <thead>
+          <tr>
+            <th>Дата</th>
+            <th>Пациент</th>
+            <th>Врач</th>
+            <th>Длительность</th>
+            <th>Оценка</th>
+            <th>Статус</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="hint">Нажмите на строку, чтобы открыть карточку.</p>
+    </section>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/list.js"></script>
+</body>
+</html>

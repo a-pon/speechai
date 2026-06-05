@@ -1,0 +1,24 @@
+services:
+  speechai:
+    build: .
+    image: speechai:local
+    container_name: speechai
+    ports:
+      - "8000:8000"
+    environment:
+      MOCK_AI: "${MOCK_AI:-true}"
+      YANDEX_API_KEY: "${YANDEX_API_KEY:-}"
+      YANDEX_FOLDER_ID: "${YANDEX_FOLDER_ID:-}"
+      YANDEXGPT_MODEL: "${YANDEXGPT_MODEL:-yandexgpt}"
+      DATABASE_URL: "${DATABASE_URL:-sqlite:////data/speechai.db}"
+      AUDIO_DIR: "${AUDIO_DIR:-/data/audio}"
+      SESSION_SECRET: "${SESSION_SECRET:-change-me}"
+    volumes:
+      - ./volumes/data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s

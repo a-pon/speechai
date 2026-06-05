@@ -1,0 +1,52 @@
+from datetime import date, datetime
+
+from pydantic import BaseModel, Field
+
+
+class TranscriptSegmentOut(BaseModel):
+    speaker_role: str
+    start_ms: int
+    end_ms: int
+    text: str
+
+    class Config:
+        from_attributes = True
+
+
+class ConsultationListItem(BaseModel):
+    id: str
+    consultation_date: date
+    doctor_name: str
+    patient_name: str
+    duration_sec: int | None
+    overall_score: float | None
+    status: str
+    created_at: datetime
+
+
+class ConsultationDetail(BaseModel):
+    id: str
+    consultation_date: date
+    doctor_name: str
+    patient_name: str
+    duration_sec: int | None
+    overall_score: float | None
+    status: str
+    error_message: str | None
+    evaluation_report: str | None
+    transcript_text: str | None
+    segments: list[TranscriptSegmentOut] = Field(default_factory=list)
+    created_at: datetime
+    processed_at: datetime | None
+
+
+class UploadResponse(BaseModel):
+    id: str
+    status: str
+    message: str
+
+
+class AuthUserOut(BaseModel):
+    username: str
+    role: str
+    doctor_name: str | None
