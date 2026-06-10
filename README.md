@@ -38,11 +38,13 @@
 
 ## Передача через ссылку
 
-Данные можно передать через query params на `GET /api/integration/1c`:
+Для открытия страницы админа с автозаполнением используйте `GET /api/integration/1c-link`:
 
 ```text
-/api/integration/1c?consultation_date=10/06/2026&doctor_code=123&doctor_full_name=Иванов%20И.И.&patient_full_name=Петров%20А.А.
+/api/integration/1c-link?consultation_date=10/06/2026&doctor_code=123&doctor_full_name=Иванов%20И.И.&patient_full_name=Петров%20А.А.
 ```
+
+Если нужен именно JSON для интеграции, используйте `GET /api/integration/1c`.
 
 Поддерживаются параметры:
 
