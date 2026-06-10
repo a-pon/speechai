@@ -11,6 +11,20 @@ class Consultation(Base):
     __tablename__ = "consultations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_system: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    doctor_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    doctor_position: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    doctor_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    patient_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    patient_birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    patient_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    patient_gender: Mapped[str | None] = mapped_column(String(1), nullable=True)
+    patient_phones_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    patient_emails_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     consultation_date: Mapped[date] = mapped_column(Date)
     doctor_name: Mapped[str] = mapped_column(String(255))
     patient_name: Mapped[str] = mapped_column(String(255))

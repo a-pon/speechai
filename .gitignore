@@ -10,4 +10,5 @@ backend/data/
 data/
 tmp/
 volumes/
+docs/INSTRUCTIONS.md
 .github/*.local

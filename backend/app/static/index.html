@@ -32,6 +32,61 @@
       <p id="login-status" class="status"></p>
     </section>
 
+    <section id="onec-section" class="dev-only" hidden>
+      <h2>Данные из 1С</h2>
+      <p class="hint">Тестовый блок для администратора. Данные можно передать через ссылку или заполнить вручную.</p>
+      <form id="onec-form">
+        <label>Дата консультации
+          <input type="text" name="consultation_date" placeholder="дд/мм/гггг">
+        </label>
+
+        <fieldset class="fieldset-block">
+          <legend>Врач</legend>
+          <label>Код
+            <input type="text" name="doctor_code" maxlength="9">
+          </label>
+          <label>ФИО
+            <input type="text" name="doctor_full_name" maxlength="70">
+          </label>
+          <label>Должность
+            <input type="text" name="doctor_position" maxlength="70">
+          </label>
+          <label>Категория врача
+            <input type="text" name="doctor_category" maxlength="35">
+          </label>
+        </fieldset>
+
+        <fieldset class="fieldset-block">
+          <legend>Пациент</legend>
+          <label>Код
+            <input type="text" name="patient_code" maxlength="9">
+          </label>
+          <label>ФИО
+            <input type="text" name="patient_full_name" maxlength="70">
+          </label>
+          <label>Дата рождения
+            <input type="text" name="patient_birth_date" placeholder="дд/мм/гггг">
+          </label>
+          <label>Возраст
+            <input type="number" name="patient_age" min="0" max="99">
+          </label>
+          <label>Пол
+            <select name="patient_gender">
+              <option value="">—</option>
+              <option value="М">М</option>
+              <option value="Ж">Ж</option>
+            </select>
+          </label>
+          <label>Телефон
+            <textarea name="patient_phones" rows="3" placeholder="Один номер на строку или через ;"></textarea>
+          </label>
+          <label>Почта
+            <textarea name="patient_emails" rows="3" placeholder="Один email на строку или через ;"></textarea>
+          </label>
+        </fieldset>
+      </form>
+    </section>
+
     <section id="upload-section" class="dev-only" hidden>
       <h2>Загрузить запись</h2>
       <p class="hint">Блок для разработки; в проде записи поступают с сервера автоматически.</p>
@@ -42,6 +97,17 @@
         <label id="doctor-name-label">Врач
           <input type="text" name="doctor_name" required placeholder="Иванов И.И.">
         </label>
+        <input type="hidden" name="source_system" value="1c">
+        <input type="hidden" name="source_payload_json">
+        <input type="hidden" name="doctor_code">
+        <input type="hidden" name="doctor_position">
+        <input type="hidden" name="doctor_category">
+        <input type="hidden" name="patient_code">
+        <input type="hidden" name="patient_birth_date">
+        <input type="hidden" name="patient_age">
+        <input type="hidden" name="patient_gender">
+        <input type="hidden" name="patient_phones_json">
+        <input type="hidden" name="patient_emails_json">
         <label>Пациент
           <input type="text" name="patient_name" required placeholder="Петрова А.">
         </label>

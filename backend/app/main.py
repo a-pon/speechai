@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.auth import router as auth_router
 from app.api.consultations import router as consultations_router
+from app.api.integration import router as integration_router
 from app.db import init_db
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -56,5 +57,6 @@ def consultation_page_legacy(consultation_id: str):
 
 app.include_router(consultations_router)
 app.include_router(auth_router)
+app.include_router(integration_router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

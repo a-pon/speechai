@@ -9,3 +9,4 @@ data
 tmp
 volumes
 .DS_Store
+docs/INSTRUCTIONS.md

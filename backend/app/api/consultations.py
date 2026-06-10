@@ -1,5 +1,6 @@
+import json
 import shutil
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,6 +16,20 @@ from app.schemas import ConsultationDetail, ConsultationListItem, TranscriptSegm
 from app.services.pipeline import process_consultation
 
 router = APIRouter(prefix="/api/consultations", tags=["consultations"])
+
+
+def _parse_ddmmyyyy_to_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(normalized, fmt).date()
+        except ValueError:
+            continue
+    raise HTTPException(400, "Дата должна быть в формате дд/мм/гггг")
 
 
 def _run_pipeline(consultation_id: str) -> None:
@@ -34,6 +49,17 @@ async def upload_consultation(
     doctor_name: str = Form(""),
     patient_name: str = Form(...),
     consultation_date: date = Form(...),
+    source_system: str | None = Form(None),
+    source_payload_json: str | None = Form(None),
+    doctor_code: str | None = Form(None),
+    doctor_position: str | None = Form(None),
+    doctor_category: str | None = Form(None),
+    patient_code: str | None = Form(None),
+    patient_birth_date: str | None = Form(None),
+    patient_age: int | None = Form(None),
+    patient_gender: str | None = Form(None),
+    patient_phones_json: str | None = Form(None),
+    patient_emails_json: str | None = Form(None),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -61,6 +87,17 @@ async def upload_consultation(
 
     consultation = Consultation(
         id=consultation_id,
+        source_system=source_system,
+        source_payload_json=source_payload_json,
+        doctor_code=doctor_code,
+        doctor_position=doctor_position,
+        doctor_category=doctor_category,
+        patient_code=patient_code,
+        patient_birth_date=_parse_ddmmyyyy_to_date(patient_birth_date),
+        patient_age=patient_age,
+        patient_gender=patient_gender,
+        patient_phones_json=patient_phones_json,
+        patient_emails_json=patient_emails_json,
         consultation_date=consultation_date,
         doctor_name=normalized_doctor_name,
         patient_name=patient_name.strip(),
