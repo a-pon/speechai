@@ -7,6 +7,9 @@ const uploadStatus = document.getElementById("upload-status");
 const recordsSection = document.getElementById("records-section");
 const onecSection = document.getElementById("onec-section");
 const onecForm = document.getElementById("onec-form");
+const doctorLoginLinkInput = document.getElementById("doctor-login-link");
+const doctorLinkUsernameInput = document.getElementById("doctor-link-username");
+const doctorLinkCreateButton = document.getElementById("doctor-link-create");
 const listBody = document.querySelector("#list-table tbody");
 const doctorNameInput = uploadForm.querySelector('[name="doctor_name"]');
 const doctorNameLabel = document.getElementById("doctor-name-label");
@@ -165,6 +168,34 @@ async function fetchList() {
   }
 }
 
+async function loadDoctorLink() {
+  if (!doctorLoginLinkInput || !currentUser || currentUser.role !== "admin") return;
+  const username = String(doctorLinkUsernameInput?.value || "").trim();
+  if (!username) {
+    doctorLoginLinkInput.value = "";
+    return;
+  }
+  const res = await apiFetch(`/api/auth/doctor-link?username=${encodeURIComponent(username)}`);
+  const data = await res.json();
+  doctorLoginLinkInput.value = data.link;
+}
+
+doctorLinkCreateButton?.addEventListener("click", async () => {
+  loginStatus.textContent = "Создаём ссылку…";
+  try {
+    await loadDoctorLink();
+    loginStatus.textContent = "";
+  } catch (err) {
+    loginStatus.textContent = "Ошибка: " + err.message;
+  }
+});
+
+doctorLinkUsernameInput?.addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  await loadDoctorLink();
+});
+
 loginForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   loginStatus.textContent = "Входим…";
@@ -214,6 +245,7 @@ async function initPage() {
 
   applyRoleUi(currentUser);
   syncOnecToUpload();
+  await loadDoctorLink();
   await fetchList();
 }
 

@@ -35,6 +35,15 @@
     <section id="onec-section" class="dev-only" hidden>
       <h2>Данные из 1С</h2>
       <p class="hint">Тестовый блок для администратора. Данные можно передать через ссылку или заполнить вручную.</p>
+      <div class="inline-row">
+        <label>Имя доктора
+          <input type="text" id="doctor-link-username" value="doctor" placeholder="doctor">
+        </label>
+        <button type="button" id="doctor-link-create">Создать ссылку</button>
+      </div>
+      <label>Ссылка входа врача
+        <input type="text" id="doctor-login-link" readonly>
+      </label>
       <form id="onec-form">
         <label>Дата консультации
           <input type="text" name="consultation_date" placeholder="дд/мм/гггг">

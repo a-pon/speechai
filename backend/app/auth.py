@@ -2,7 +2,9 @@ import base64
 import hashlib
 import hmac
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Literal, TypedDict
+from urllib.parse import urlencode
 
 from fastapi import HTTPException, Request, Response
 
@@ -37,6 +39,23 @@ def authenticate_user(username: str, password: str) -> UserInfo | None:
     }
 
 
+def _normalize_user(user: UserInfo | dict) -> UserInfo | None:
+    if not isinstance(user, dict):
+        return None
+    username = str(user.get("username") or "").strip()
+    role = user.get("role")
+    if role not in {"admin", "doctor"} or not username:
+        return None
+    doctor_name = user.get("doctor_name")
+    if doctor_name is not None:
+        doctor_name = str(doctor_name).strip() or None
+    return {
+        "username": username,
+        "role": role,
+        "doctor_name": doctor_name,
+    }
+
+
 def _sign(payload: str) -> str:
     secret = get_settings().session_secret.encode("utf-8")
     return hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -47,6 +66,53 @@ def _encode_user(user: UserInfo) -> str:
     encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
     signature = _sign(encoded)
     return f"{encoded}.{signature}"
+
+
+def _build_login_token(username: str, expires_at: datetime) -> str:
+    payload = {
+        "username": username,
+        "expires_at": expires_at.isoformat(),
+    }
+    raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+    signature = _sign(encoded)
+    return f"{encoded}.{signature}"
+
+
+def build_doctor_login_link(username: str, base_url: str | None = None) -> str | None:
+    user = USERS.get(username.strip())
+    if not user or user["role"] != "doctor":
+        return None
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+    token = _build_login_token(username.strip(), expires_at)
+    query = urlencode({"token": token})
+    path = f"/api/auth/link-doctor?{query}"
+    return f"{base_url.rstrip('/')}{path}" if base_url else path
+
+
+def _decode_login_token(token: str | None) -> str | None:
+    if not token or "." not in token:
+        return None
+    encoded, signature = token.rsplit(".", 1)
+    if not hmac.compare_digest(_sign(encoded), signature):
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    username = str(payload.get("username") or "").strip()
+    expires_at_raw = str(payload.get("expires_at") or "").strip()
+    if not username or not expires_at_raw:
+        return None
+    try:
+        expires_at = datetime.fromisoformat(expires_at_raw)
+    except ValueError:
+        return None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        return None
+    return username
 
 
 def _decode_user(cookie_value: str | None) -> UserInfo | None:
@@ -63,9 +129,7 @@ def _decode_user(cookie_value: str | None) -> UserInfo | None:
     except (ValueError, json.JSONDecodeError):
         return None
 
-    if user.get("role") not in {"admin", "doctor"}:
-        return None
-    return user
+    return _normalize_user(user)
 
 
 def set_login_cookie(response: Response, user: UserInfo) -> None:
@@ -90,3 +154,18 @@ def get_current_user(request: Request) -> UserInfo:
 
 def can_access_doctor_record(user: UserInfo, doctor_name: str) -> bool:
     return user["role"] == "admin" or user["doctor_name"] == doctor_name
+
+
+def login_doctor_by_token(token: str | None) -> UserInfo | None:
+    username = _decode_login_token(token)
+    if not username:
+        return None
+    user = USERS.get(username)
+    if not user or user["role"] != "doctor":
+        return None
+    doctor_name = user["doctor_name"] or None
+    return {
+        "username": username,
+        "role": user["role"],  # type: ignore[return-value]
+        "doctor_name": doctor_name,
+    }
