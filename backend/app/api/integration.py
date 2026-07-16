@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
-from app.auth import get_current_user
+from app.auth import build_doctor_login_link, get_current_user
 from app.schemas import OneCConsultationIn, OneCConsultationOut, OneCDoctorIn, OneCPatientIn
 
 router = APIRouter(prefix="/api/integration", tags=["integration"])
@@ -79,6 +79,47 @@ def open_1c_link(
         if value not in (None, "")
     }
     return RedirectResponse(url="/?" + urlencode(params, doseq=True), status_code=307)
+
+
+@router.get("/doctor-entry")
+def open_doctor_entry(
+    username: str,
+    consultation_date: str | None = None,
+    doctor_code: str | None = None,
+    doctor_full_name: str | None = None,
+    doctor_position: str | None = None,
+    doctor_category: str | None = None,
+    patient_code: str | None = None,
+    patient_full_name: str | None = None,
+    patient_birth_date: str | None = None,
+    patient_age: int | None = None,
+    patient_gender: str | None = None,
+    patient_phones: str | None = None,
+    patient_emails: str | None = None,
+):
+    params = {
+        key: value
+        for key, value in {
+            "consultation_date": consultation_date,
+            "doctor_code": doctor_code,
+            "doctor_full_name": doctor_full_name,
+            "doctor_position": doctor_position,
+            "doctor_category": doctor_category,
+            "patient_code": patient_code,
+            "patient_full_name": patient_full_name,
+            "patient_birth_date": patient_birth_date,
+            "patient_age": patient_age,
+            "patient_gender": patient_gender,
+            "patient_phones": patient_phones,
+            "patient_emails": patient_emails,
+        }.items()
+        if value not in (None, "")
+    }
+    next_path = "/?" + urlencode(params, doseq=True)
+    link = build_doctor_login_link(username, None, next_path=next_path)
+    if not link:
+        raise HTTPException(404, "Пользователь врача не найден")
+    return RedirectResponse(url=link, status_code=307)
 
 
 @router.get("/1c", response_model=OneCConsultationOut)

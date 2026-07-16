@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.auth import (
     authenticate_user,
@@ -9,7 +10,9 @@ from app.auth import (
     get_current_user,
     login_doctor_by_token,
     set_login_cookie,
+    token_next_path,
 )
+from app.db import get_db
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -25,8 +28,8 @@ class DoctorLinkResponse(BaseModel):
 
 
 @router.post("/login")
-def login(payload: LoginRequest, response: Response):
-    user = authenticate_user(payload.username, payload.password)
+def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
+    user = authenticate_user(db, payload.username, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
@@ -58,11 +61,11 @@ def doctor_link(request: Request, username: str, user=Depends(get_current_user))
 
 
 @router.get("/link-doctor")
-def login_doctor(token: str, response: Response):
-    user = login_doctor_by_token(token)
+def login_doctor(token: str, next: str = "/", db: Session = Depends(get_db)):
+    user = login_doctor_by_token(token, db)
     if not user:
         raise HTTPException(status_code=401, detail="Ссылка недействительна или устарела")
 
-    redirect = RedirectResponse(url="/", status_code=302)
+    redirect = RedirectResponse(url=next or token_next_path(token), status_code=302)
     set_login_cookie(redirect, user)
     return redirect

@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.auth import router as auth_router
 from app.api.consultations import router as consultations_router
 from app.api.integration import router as integration_router
+from app.api.users import router as users_router
 from app.db import init_db
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -18,7 +19,7 @@ def _consultation_page() -> FileResponse:
     return FileResponse(CONSULTATION_HTML, media_type="text/html")
 
 
-APP_VERSION = "0.1.0-mvp"
+APP_VERSION = "1.1.0"
 APP_PORT = int(os.getenv("PORT", "8000"))
 
 app = FastAPI(title="SpeechAI", version=APP_VERSION)
@@ -58,5 +59,6 @@ def consultation_page_legacy(consultation_id: str):
 app.include_router(consultations_router)
 app.include_router(auth_router)
 app.include_router(integration_router)
+app.include_router(users_router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

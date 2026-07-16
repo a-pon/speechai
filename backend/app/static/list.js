@@ -1,129 +1,200 @@
 const loginSection = document.getElementById("login-section");
 const loginForm = document.getElementById("login-form");
 const loginStatus = document.getElementById("login-status");
+const mainTabs = document.getElementById("main-tabs");
 const uploadSection = document.getElementById("upload-section");
 const uploadForm = document.getElementById("upload-form");
 const uploadStatus = document.getElementById("upload-status");
 const recordsSection = document.getElementById("records-section");
+const usersSection = document.getElementById("users-section");
 const onecSection = document.getElementById("onec-section");
 const onecForm = document.getElementById("onec-form");
-const doctorLoginLinkInput = document.getElementById("doctor-login-link");
-const doctorLinkUsernameInput = document.getElementById("doctor-link-username");
-const doctorLinkCreateButton = document.getElementById("doctor-link-create");
+const usersTableBody = document.querySelector("#users-table tbody");
+const userCreateForm = document.getElementById("user-create-form");
+const userCreateStatus = document.getElementById("user-create-status");
 const listBody = document.querySelector("#list-table tbody");
 const doctorNameInput = uploadForm.querySelector('[name="doctor_name"]');
 const doctorNameLabel = document.getElementById("doctor-name-label");
+const consultationDateInput = uploadForm.querySelector('[name="consultation_date"]');
 
 let pollTimer = null;
 let currentUser = null;
+let activeView = "upload";
+const authRetryDelayMs = 250;
 
-function applyRoleUi(user) {
-  loginSection.hidden = true;
-  uploadSection.hidden = false;
-  recordsSection.hidden = false;
-  onecSection.hidden = user.role !== "admin";
-  renderAuthBar(user);
-
-  if (user.role === "doctor") {
-    doctorNameInput.value = user.doctor_name || user.username;
-    doctorNameInput.readOnly = true;
-    doctorNameInput.setAttribute("aria-readonly", "true");
-    doctorNameLabel.querySelector("input").title = "Поле заполняется автоматически";
-  } else {
-    doctorNameInput.readOnly = false;
-    doctorNameInput.removeAttribute("aria-readonly");
-  }
+function formatIsoDate(value) {
+  if (!value) return "";
+  const trimmed = String(value).trim();
+  if (!trimmed) return "";
+  const parts = trimmed.split("-");
+  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : trimmed;
 }
 
-function splitOnecList(value) {
-  return value
+function formatDmyDate(value) {
+  if (!value) return "";
+  const trimmed = String(value).trim();
+  if (!trimmed) return "";
+  const parts = trimmed.split("/");
+  return parts.length === 3 ? `${parts[2]}-${parts[1]}-${parts[0]}` : trimmed;
+}
+
+function todayIsoLocal() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function splitList(value) {
+  return String(value || "")
     .replace(/\n/g, ";")
     .split(";")
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
-function isoToDisplayDate(value) {
-  if (!value) return "";
-  const trimmed = String(value).trim();
-  if (!trimmed) return "";
-  const parts = trimmed.split("-");
-  if (parts.length === 3) {
-    return `${parts[2]}/${parts[1]}/${parts[0]}`;
-  }
-  return trimmed;
+function setView(view) {
+  activeView = view;
+  const buttons = mainTabs?.querySelectorAll("button[data-view]") || [];
+  buttons.forEach((btn) => btn.classList.toggle("active", btn.dataset.view === view));
+  uploadSection.hidden = view !== "upload";
+  recordsSection.hidden = view !== "records";
+  usersSection.hidden = view !== "users" || !currentUser || currentUser.role !== "admin";
 }
 
-function displayToIsoDate(value) {
-  const trimmed = String(value || "").trim();
-  if (!trimmed) return "";
-  const parts = trimmed.split("/");
-  if (parts.length === 3) {
-    return `${parts[2]}-${parts[1]}-${parts[0]}`;
-  }
-  return trimmed;
+function setupTabs() {
+  mainTabs?.querySelectorAll("button[data-view]").forEach((btn) => {
+    btn.addEventListener("click", () => setView(btn.dataset.view));
+  });
 }
 
-function readOnecForm() {
+function syncHiddenUploadFieldsFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const queryMap = {
+    doctor_code: "doctor_code",
+    doctor_full_name: "doctor_full_name",
+    doctor_position: "doctor_position",
+    doctor_category: "doctor_category",
+    patient_code: "patient_code",
+    patient_full_name: "patient_full_name",
+    patient_birth_date: "patient_birth_date",
+    patient_age: "patient_age",
+    patient_gender: "patient_gender",
+    patient_phones: "patient_phones_json",
+    patient_emails: "patient_emails_json",
+  };
+
+  Object.entries(queryMap).forEach(([paramName, fieldName]) => {
+    const value = params.get(paramName);
+    const input = uploadForm.querySelector(`[name="${fieldName}"]`);
+    if (!input || value == null) return;
+    if (fieldName === "patient_phones_json" || fieldName === "patient_emails_json") {
+      input.value = JSON.stringify(splitList(value));
+    } else {
+      input.value = value;
+    }
+  });
+
+  const sourcePayloadInput = uploadForm.querySelector('[name="source_payload_json"]');
+  if (sourcePayloadInput) {
+    const payload = {
+      consultation_date: params.get("consultation_date") || null,
+      doctor: {
+        code: params.get("doctor_code") || null,
+        full_name: params.get("doctor_full_name") || null,
+        position: params.get("doctor_position") || null,
+        category: params.get("doctor_category") || null,
+      },
+      patient: {
+        code: params.get("patient_code") || null,
+        full_name: params.get("patient_full_name") || null,
+        birth_date: params.get("patient_birth_date") || null,
+        age: params.get("patient_age") || null,
+        gender: params.get("patient_gender") || null,
+        phones: splitList(params.get("patient_phones")),
+        emails: splitList(params.get("patient_emails")),
+      },
+    };
+    sourcePayloadInput.value = JSON.stringify(payload);
+  }
+  const consultationFromQuery = params.get("consultation_date");
+  if (consultationFromQuery) {
+    consultationDateInput.value = formatDmyDate(consultationFromQuery);
+  }
+}
+
+function applyQueryToUploadForm() {
+  const params = new URLSearchParams(window.location.search);
+  const doctorFullName = params.get("doctor_full_name") || currentUser?.doctor_name || currentUser?.username || "";
+  const patientFullName = params.get("patient_full_name") || "";
+  doctorNameInput.value = currentUser?.role === "doctor" ? (currentUser.doctor_name || currentUser.username) : doctorFullName;
+  if (patientFullName) {
+    uploadForm.querySelector('[name="patient_name"]').value = patientFullName;
+  }
+  consultationDateInput.value = todayIsoLocal();
+  if (currentUser?.role === "admin" && params.get("consultation_date")) {
+    consultationDateInput.value = formatDmyDate(params.get("consultation_date"));
+  }
+}
+
+function applyOnecToUploadForm() {
+  if (!onecForm) return;
   const fd = new FormData(onecForm);
-  const doctor = {
-    code: String(fd.get("doctor_code") || "").trim() || null,
-    full_name: String(fd.get("doctor_full_name") || "").trim() || null,
-    position: String(fd.get("doctor_position") || "").trim() || null,
-    category: String(fd.get("doctor_category") || "").trim() || null,
+  const mappings = {
+    doctor_code: "doctor_code",
+    doctor_full_name: "doctor_name",
+    doctor_position: "doctor_position",
+    doctor_category: "doctor_category",
+    patient_code: "patient_code",
+    patient_full_name: "patient_name",
+    patient_birth_date: "patient_birth_date",
+    patient_age: "patient_age",
+    patient_gender: "patient_gender",
   };
-  const patientPhones = splitOnecList(String(fd.get("patient_phones") || ""));
-  const patientEmails = splitOnecList(String(fd.get("patient_emails") || ""));
-  const patient = {
-    code: String(fd.get("patient_code") || "").trim() || null,
-    full_name: String(fd.get("patient_full_name") || "").trim() || null,
-    birth_date: String(fd.get("patient_birth_date") || "").trim() || null,
-    age: String(fd.get("patient_age") || "").trim() || null,
-    gender: String(fd.get("patient_gender") || "").trim() || null,
-    phones: patientPhones,
-    emails: patientEmails,
-  };
-  return {
-    consultation_date: String(fd.get("consultation_date") || "").trim() || null,
-    doctor,
-    patient,
-  };
-}
-
-function syncOnecToUpload() {
-  const payload = readOnecForm();
+  Object.entries(mappings).forEach(([sourceName, targetName]) => {
+    const target = uploadForm.querySelector(`[name="${targetName}"]`);
+    if (!target) return;
+    const value = String(fd.get(sourceName) || "").trim();
+    if (value) target.value = value;
+  });
   const hiddenMap = {
-    source_payload_json: JSON.stringify(payload),
-    doctor_code: payload.doctor.code || "",
-    doctor_position: payload.doctor.position || "",
-    doctor_category: payload.doctor.category || "",
-    patient_code: payload.patient.code || "",
-    patient_birth_date: payload.patient.birth_date || "",
-    patient_age: payload.patient.age || "",
-    patient_gender: payload.patient.gender || "",
-    patient_phones_json: JSON.stringify(payload.patient.phones),
-    patient_emails_json: JSON.stringify(payload.patient.emails),
+    source_payload_json: JSON.stringify({
+      consultation_date: String(fd.get("consultation_date") || "").trim() || null,
+      doctor: {
+        code: String(fd.get("doctor_code") || "").trim() || null,
+        full_name: String(fd.get("doctor_full_name") || "").trim() || null,
+        position: String(fd.get("doctor_position") || "").trim() || null,
+        category: String(fd.get("doctor_category") || "").trim() || null,
+      },
+      patient: {
+        code: String(fd.get("patient_code") || "").trim() || null,
+        full_name: String(fd.get("patient_full_name") || "").trim() || null,
+        birth_date: String(fd.get("patient_birth_date") || "").trim() || null,
+        age: String(fd.get("patient_age") || "").trim() || null,
+        gender: String(fd.get("patient_gender") || "").trim() || null,
+        phones: splitList(fd.get("patient_phones")),
+        emails: splitList(fd.get("patient_emails")),
+      },
+    }),
+    doctor_code: String(fd.get("doctor_code") || "").trim() || "",
+    doctor_position: String(fd.get("doctor_position") || "").trim() || "",
+    doctor_category: String(fd.get("doctor_category") || "").trim() || "",
+    patient_code: String(fd.get("patient_code") || "").trim() || "",
+    patient_birth_date: String(fd.get("patient_birth_date") || "").trim() || "",
+    patient_age: String(fd.get("patient_age") || "").trim() || "",
+    patient_gender: String(fd.get("patient_gender") || "").trim() || "",
+    patient_phones_json: JSON.stringify(splitList(fd.get("patient_phones"))),
+    patient_emails_json: JSON.stringify(splitList(fd.get("patient_emails"))),
   };
-
   Object.entries(hiddenMap).forEach(([name, value]) => {
     const input = uploadForm.querySelector(`[name="${name}"]`);
     if (input) input.value = value;
   });
-
-  if (payload.doctor.full_name) {
-    doctorNameInput.value = payload.doctor.full_name;
-  }
-  const patientInput = uploadForm.querySelector('[name="patient_name"]');
-  if (payload.patient.full_name) {
-    patientInput.value = payload.patient.full_name;
-  }
-  const consultationDateInput = uploadForm.querySelector('[name="consultation_date"]');
-  if (payload.consultation_date) {
-    consultationDateInput.value = displayToIsoDate(payload.consultation_date);
-  }
+  consultationDateInput.value = String(fd.get("consultation_date") || "").trim() || todayIsoLocal();
 }
 
-async function fetchList() {
+async function fetchConsultations() {
   const res = await apiFetch("/api/consultations");
   const items = await res.json();
   listBody.innerHTML = "";
@@ -141,17 +212,14 @@ async function fetchList() {
         ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
       </td>
     `;
-    const deleteBtn = tr.querySelector(".btn-delete");
-    if (deleteBtn) {
-      deleteBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        try {
-          if (await deleteConsultation(item.id)) fetchList();
-        } catch (err) {
-          alert("Ошибка: " + err.message);
-        }
-      });
-    }
+    tr.querySelector(".btn-delete")?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        if (await deleteConsultation(item.id)) fetchConsultations();
+      } catch (err) {
+        alert("Ошибка: " + err.message);
+      }
+    });
     tr.addEventListener("click", () => {
       window.location.href = `/record/${item.id}`;
     });
@@ -160,7 +228,7 @@ async function fetchList() {
 
   const pending = items.some((i) => i.status === "processing" || i.status === "uploaded");
   if (pending && !pollTimer) {
-    pollTimer = setInterval(fetchList, 3000);
+    pollTimer = setInterval(fetchConsultations, 3000);
   }
   if (!pending && pollTimer) {
     clearInterval(pollTimer);
@@ -168,32 +236,104 @@ async function fetchList() {
   }
 }
 
-async function loadDoctorLink() {
-  if (!doctorLoginLinkInput || !currentUser || currentUser.role !== "admin") return;
-  const username = String(doctorLinkUsernameInput?.value || "").trim();
-  if (!username) {
-    doctorLoginLinkInput.value = "";
-    return;
-  }
-  const res = await apiFetch(`/api/auth/doctor-link?username=${encodeURIComponent(username)}`);
-  const data = await res.json();
-  doctorLoginLinkInput.value = data.link;
+async function loadUsers() {
+  if (!currentUser || currentUser.role !== "admin") return;
+  const res = await apiFetch("/api/users");
+  const users = await res.json();
+  usersTableBody.innerHTML = "";
+  users.forEach((user) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="text" class="u-username" value="${escapeHtml(user.username)}" readonly></td>
+      <td>
+        <select class="u-role">
+          <option value="doctor" ${user.role === "doctor" ? "selected" : ""}>doctor</option>
+          <option value="admin" ${user.role === "admin" ? "selected" : ""}>admin</option>
+        </select>
+      </td>
+      <td><input type="text" class="u-doctor-name" value="${escapeHtml(user.doctor_name || "")}"></td>
+      <td><input type="text" class="u-password" maxlength="8" minlength="8" placeholder="новый пароль"></td>
+      <td>
+        <div class="link-cell">
+          <input type="text" class="u-link" value="${escapeHtml(user.login_link || "")}" readonly>
+          <button type="button" class="btn-link">Копировать</button>
+        </div>
+      </td>
+      <td class="row-actions">
+        <button type="button" class="btn-save">Сохранить</button>
+        ${user.username === "admin" ? "" : '<button type="button" class="btn-delete">Удалить</button>'}
+      </td>
+    `;
+    tr.querySelector(".btn-link").addEventListener("click", async () => {
+      const link = tr.querySelector(".u-link").value;
+      await navigator.clipboard.writeText(link);
+      userCreateStatus.textContent = "Ссылка скопирована";
+      setTimeout(() => (userCreateStatus.textContent = ""), 1200);
+    });
+    tr.querySelector(".btn-save").addEventListener("click", async () => {
+      try {
+        const payload = {
+          role: tr.querySelector(".u-role").value,
+          doctor_name: tr.querySelector(".u-doctor-name").value,
+          password: tr.querySelector(".u-password").value || null,
+        };
+        const resSave = await apiFetch(`/api/users/${encodeURIComponent(user.username)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!resSave.ok) {
+          const data = await resSave.json().catch(() => ({}));
+          throw new Error(data.detail || "Не удалось сохранить пользователя");
+        }
+        userCreateStatus.textContent = "Пользователь сохранён";
+        await loadUsers();
+      } catch (err) {
+        userCreateStatus.textContent = "Ошибка: " + err.message;
+      }
+    });
+    tr.querySelector(".btn-delete")?.addEventListener("click", async () => {
+      if (!confirm(`Удалить пользователя ${user.username}?`)) return;
+      try {
+        const resDelete = await apiFetch(`/api/users/${encodeURIComponent(user.username)}`, {
+          method: "DELETE",
+        });
+        if (!resDelete.ok) {
+          const data = await resDelete.json().catch(() => ({}));
+          throw new Error(data.detail || "Не удалось удалить пользователя");
+        }
+        await loadUsers();
+      } catch (err) {
+        userCreateStatus.textContent = "Ошибка: " + err.message;
+      }
+    });
+    usersTableBody.appendChild(tr);
+  });
 }
 
-doctorLinkCreateButton?.addEventListener("click", async () => {
-  loginStatus.textContent = "Создаём ссылку…";
-  try {
-    await loadDoctorLink();
-    loginStatus.textContent = "";
-  } catch (err) {
-    loginStatus.textContent = "Ошибка: " + err.message;
-  }
-});
-
-doctorLinkUsernameInput?.addEventListener("keydown", async (e) => {
-  if (e.key !== "Enter") return;
+userCreateForm?.addEventListener("submit", async (e) => {
   e.preventDefault();
-  await loadDoctorLink();
+  const fd = new FormData(userCreateForm);
+  const payload = {
+    username: String(fd.get("username") || "").trim(),
+    role: String(fd.get("role") || "").trim(),
+    doctor_name: String(fd.get("doctor_name") || "").trim(),
+    password: String(fd.get("password") || "").trim(),
+  };
+  try {
+    const res = await apiFetch("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "Не удалось создать пользователя");
+    userCreateStatus.textContent = "Пользователь добавлен";
+    userCreateForm.reset();
+    await loadUsers();
+  } catch (err) {
+    userCreateStatus.textContent = "Ошибка: " + err.message;
+  }
 });
 
 loginForm.addEventListener("submit", async (e) => {
@@ -204,14 +344,12 @@ loginForm.addEventListener("submit", async (e) => {
     currentUser = await login(formData.get("username"), formData.get("password"));
     loginStatus.textContent = "";
     loginForm.reset();
-    applyRoleUi(currentUser);
-    await fetchList();
+    renderAuthBar(currentUser);
+    await initWorkspace();
   } catch (err) {
     loginStatus.textContent = "Ошибка: " + err.message;
   }
 });
-
-onecForm.addEventListener("input", syncOnecToUpload);
 
 uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -223,63 +361,65 @@ uploadForm.addEventListener("submit", async (e) => {
     if (!res.ok) throw new Error(data.detail || "Ошибка загрузки");
     window.location.href = `/record/${data.id}`;
   } catch (err) {
-    if (err.code === 401) {
-      window.location.reload();
-      return;
-    }
     uploadStatus.textContent = "Ошибка: " + err.message;
   }
 });
 
-const dateInput = uploadForm.querySelector('[name="consultation_date"]');
-dateInput.valueAsDate = new Date();
+async function initWorkspace() {
+  if (!currentUser) return;
+  loginSection.hidden = true;
+  mainTabs.hidden = false;
+  mainTabs.querySelectorAll(".admin-only").forEach((node) => {
+    node.hidden = currentUser.role !== "admin";
+  });
+  onecSection.hidden = currentUser.role !== "doctor";
+  applyQueryToUploadForm();
+  syncHiddenUploadFieldsFromQuery();
+  if (currentUser.role === "doctor") {
+    onecForm.addEventListener("input", applyOnecToUploadForm);
+    applyOnecToUploadForm();
+  }
+  if (currentUser.role === "doctor") {
+    doctorNameInput.readOnly = true;
+    doctorNameInput.setAttribute("aria-readonly", "true");
+    doctorNameLabel.querySelector("input").title = "Поле заполняется автоматически";
+  } else {
+    doctorNameInput.readOnly = false;
+    doctorNameInput.removeAttribute("aria-readonly");
+  }
+  setView("upload");
+  await fetchConsultations();
+  if (currentUser.role === "admin") {
+    await loadUsers();
+  }
+}
+
+async function getCurrentUserWithRetry() {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const user = await getCurrentUser();
+    if (user) return user;
+    if (attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, authRetryDelayMs));
+    }
+  }
+  return null;
+}
 
 async function initPage() {
-  currentUser = await getCurrentUser();
+  setupTabs();
+  currentUser = await getCurrentUserWithRetry();
   if (!currentUser) {
     loginSection.hidden = false;
+    mainTabs.hidden = true;
     uploadSection.hidden = true;
     recordsSection.hidden = true;
+    usersSection.hidden = true;
     return;
   }
-
-  applyRoleUi(currentUser);
-  syncOnecToUpload();
-  await loadDoctorLink();
-  await fetchList();
+  renderAuthBar(currentUser);
+  await initWorkspace();
 }
 
-function fillOnecFromQuery() {
-  const params = new URLSearchParams(window.location.search);
-  const map = {
-    consultation_date: "consultation_date",
-    doctor_code: "doctor_code",
-    doctor_full_name: "doctor_full_name",
-    doctor_position: "doctor_position",
-    doctor_category: "doctor_category",
-    patient_code: "patient_code",
-    patient_full_name: "patient_full_name",
-    patient_birth_date: "patient_birth_date",
-    patient_age: "patient_age",
-    patient_gender: "patient_gender",
-    patient_phones: "patient_phones",
-    patient_emails: "patient_emails",
-  };
-
-  Object.entries(map).forEach(([paramName, fieldName]) => {
-    const value = params.get(paramName);
-    if (!value) return;
-    const field = onecForm.querySelector(`[name="${fieldName}"]`);
-    if (!field) return;
-    if (fieldName === "consultation_date" || fieldName === "patient_birth_date") {
-      field.value = isoToDisplayDate(value);
-      return;
-    }
-    field.value = value;
-  });
-}
-
-fillOnecFromQuery();
 initPage().catch((err) => {
   loginStatus.textContent = "Ошибка: " + err.message;
 });

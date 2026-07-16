@@ -6,6 +6,7 @@ const tabEvaluation = document.getElementById("tab-evaluation");
 
 let pollTimer = null;
 let currentUser = null;
+const authRetryDelayMs = 250;
 
 async function loadDetail() {
   const res = await apiFetch(`/api/consultations/${consultationId}`);
@@ -88,7 +89,13 @@ document.querySelectorAll(".tabs button").forEach((btn) => {
 });
 
 async function initPage() {
-  currentUser = await getCurrentUser();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    currentUser = await getCurrentUser();
+    if (currentUser) break;
+    if (attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, authRetryDelayMs));
+    }
+  }
   if (!currentUser) {
     authRequired.hidden = false;
     setTimeout(() => {

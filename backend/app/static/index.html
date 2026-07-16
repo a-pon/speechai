@@ -19,7 +19,7 @@
 
   <main>
     <section id="login-section">
-      <h2>Вход в админку</h2>
+      <h2>Вход</h2>
       <form id="login-form">
         <label>Логин
           <input type="text" name="username" required autocomplete="username">
@@ -32,18 +32,15 @@
       <p id="login-status" class="status"></p>
     </section>
 
-    <section id="onec-section" class="dev-only" hidden>
+    <nav id="main-tabs" class="tabs" hidden>
+      <button type="button" data-view="upload" class="active">Загрузить запись</button>
+      <button type="button" data-view="records">Записи</button>
+      <button type="button" data-view="users" class="admin-only" hidden>Пользователи</button>
+    </nav>
+
+    <section id="onec-section" hidden>
       <h2>Данные из 1С</h2>
-      <p class="hint">Тестовый блок для администратора. Данные можно передать через ссылку или заполнить вручную.</p>
-      <div class="inline-row">
-        <label>Имя доктора
-          <input type="text" id="doctor-link-username" value="doctor" placeholder="doctor">
-        </label>
-        <button type="button" id="doctor-link-create">Создать ссылку</button>
-      </div>
-      <label>Ссылка входа врача
-        <input type="text" id="doctor-login-link" readonly>
-      </label>
+      <p class="hint">Блок для врача: данные подставляются из ссылки, но их можно редактировать перед загрузкой.</p>
       <form id="onec-form">
         <label>Дата консультации
           <input type="text" name="consultation_date" placeholder="дд/мм/гггг">
@@ -126,6 +123,43 @@
         <button type="submit">Загрузить и обработать</button>
       </form>
       <p id="upload-status" class="status"></p>
+    </section>
+
+    <section id="users-section" class="admin-only" hidden>
+      <h2>Пользователи</h2>
+      <p class="hint">Добавляйте, редактируйте и удаляйте учётные записи врачей и администратора.</p>
+      <form id="user-create-form" class="card-form">
+        <label>Логин
+          <input type="text" name="username" required>
+        </label>
+        <label>Роль
+          <select name="role" required>
+            <option value="doctor">doctor</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+        <label>Имя врача
+          <input type="text" name="doctor_name" placeholder="Для doctor заполняется автоматически">
+        </label>
+        <label>Пароль
+          <input type="text" name="password" required maxlength="8" minlength="8">
+        </label>
+        <button type="submit">Добавить пользователя</button>
+      </form>
+      <p id="user-create-status" class="status"></p>
+      <table id="users-table">
+        <thead>
+          <tr>
+            <th>Логин</th>
+            <th>Роль</th>
+            <th>Имя врача</th>
+            <th>Новый пароль</th>
+            <th>Ссылка</th>
+            <th>Действия</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </section>
 
     <section id="records-section" hidden>

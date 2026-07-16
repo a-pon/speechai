@@ -8,5 +8,6 @@ backend/data
 data
 tmp
 volumes
+docs
 .DS_Store
 docs/INSTRUCTIONS.md

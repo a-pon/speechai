@@ -2,13 +2,17 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Literal, TypedDict
 from urllib.parse import urlencode
 
-from fastapi import HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.db import SessionLocal, get_db
+from app.models import User
 
 AUTH_COOKIE_NAME = "speechai_auth"
 
@@ -19,23 +23,59 @@ class UserInfo(TypedDict):
     doctor_name: str | None
 
 
-USERS: dict[str, dict[str, str]] = {
-    "admin": {"password": "adm1n", "role": "admin", "doctor_name": ""},
-    "doctor": {"password": "doctor", "role": "doctor", "doctor_name": "doctor"},
-}
+DEFAULT_USERS: list[dict[str, str]] = [
+    {"username": "admin", "password": "Q7m4Lp8Z", "role": "admin", "doctor_name": "admin"},
+    {"username": "Кухтарская Татьяна", "password": "N6v2Ts5K", "role": "doctor", "doctor_name": "Кухтарская Татьяна"},
+    {"username": "Кудзиева Тамара", "password": "H8r3Qp1M", "role": "doctor", "doctor_name": "Кудзиева Тамара"},
+    {"username": "Иваненчук Иван", "password": "X4c9Wz2D", "role": "doctor", "doctor_name": "Иваненчук Иван"},
+    {"username": "Корнилова Анастасия", "password": "P5t7Jn8A", "role": "doctor", "doctor_name": "Корнилова Анастасия"},
+]
 
 
-def authenticate_user(username: str, password: str) -> UserInfo | None:
+def _password_hash(password: str) -> str:
+    secret = get_settings().session_secret.encode("utf-8")
+    return hashlib.sha256(secret + password.encode("utf-8")).hexdigest()
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return hmac.compare_digest(_password_hash(password), password_hash)
+
+
+def build_password_hash(password: str) -> str:
+    return _password_hash(password)
+
+
+def create_default_users(db: Session) -> None:
+    existing = {row.username for row in db.query(User.username).all()}
+    for entry in DEFAULT_USERS:
+        if entry["username"] in existing:
+            continue
+        db.add(
+            User(
+                username=entry["username"],
+                role=entry["role"],
+                doctor_name=entry["doctor_name"] or None,
+                password_hash=build_password_hash(entry["password"]),
+            )
+        )
+    db.commit()
+
+
+def seed_demo_password() -> str:
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    return "".join(secrets.choice(alphabet) for _ in range(8))
+
+
+def authenticate_user(db: Session, username: str, password: str) -> UserInfo | None:
     normalized_username = username.strip()
-    user = USERS.get(normalized_username)
-    if not user or user["password"] != password:
+    user = db.get(User, normalized_username)
+    if not user or not verify_password(password, user.password_hash):
         return None
 
-    doctor_name = user["doctor_name"] or None
     return {
-        "username": normalized_username,
-        "role": user["role"],  # type: ignore[return-value]
-        "doctor_name": doctor_name,
+        "username": user.username,
+        "role": user.role,  # type: ignore[return-value]
+        "doctor_name": user.doctor_name,
     }
 
 
@@ -68,10 +108,11 @@ def _encode_user(user: UserInfo) -> str:
     return f"{encoded}.{signature}"
 
 
-def _build_login_token(username: str, expires_at: datetime) -> str:
+def _build_login_token(username: str, expires_at: datetime, next_path: str | None = None) -> str:
     payload = {
         "username": username,
         "expires_at": expires_at.isoformat(),
+        "next": next_path or "/",
     }
     raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
@@ -79,40 +120,44 @@ def _build_login_token(username: str, expires_at: datetime) -> str:
     return f"{encoded}.{signature}"
 
 
-def build_doctor_login_link(username: str, base_url: str | None = None) -> str | None:
-    user = USERS.get(username.strip())
-    if not user or user["role"] != "doctor":
+def build_doctor_login_link(username: str, base_url: str | None = None, next_path: str | None = None) -> str | None:
+    db = SessionLocal()
+    try:
+        user = db.get(User, username.strip())
+    finally:
+        db.close()
+    if not user or user.role != "doctor":
         return None
     expires_at = datetime.now(timezone.utc) + timedelta(days=30)
-    token = _build_login_token(username.strip(), expires_at)
-    query = urlencode({"token": token})
-    path = f"/api/auth/link-doctor?{query}"
+    token = _build_login_token(username.strip(), expires_at, next_path=next_path)
+    path = f"/api/auth/link-doctor?{urlencode({'token': token, 'next': next_path or '/'})}"
     return f"{base_url.rstrip('/')}{path}" if base_url else path
 
 
-def _decode_login_token(token: str | None) -> str | None:
+def _decode_login_token(token: str | None) -> tuple[str | None, str]:
     if not token or "." not in token:
-        return None
+        return None, "/"
     encoded, signature = token.rsplit(".", 1)
     if not hmac.compare_digest(_sign(encoded), signature):
-        return None
+        return None, "/"
     try:
         payload = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8"))
     except (ValueError, json.JSONDecodeError):
-        return None
+        return None, "/"
     username = str(payload.get("username") or "").strip()
     expires_at_raw = str(payload.get("expires_at") or "").strip()
+    next_path = str(payload.get("next") or "/").strip() or "/"
     if not username or not expires_at_raw:
-        return None
+        return None, "/"
     try:
         expires_at = datetime.fromisoformat(expires_at_raw)
     except ValueError:
-        return None
+        return None, "/"
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at < datetime.now(timezone.utc):
-        return None
-    return username
+        return None, "/"
+    return username, next_path
 
 
 def _decode_user(cookie_value: str | None) -> UserInfo | None:
@@ -145,27 +190,38 @@ def clear_login_cookie(response: Response) -> None:
     response.delete_cookie(AUTH_COOKIE_NAME)
 
 
-def get_current_user(request: Request) -> UserInfo:
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> UserInfo:
     user = _decode_user(request.cookies.get(AUTH_COOKIE_NAME))
     if not user:
         raise HTTPException(status_code=401, detail="Требуется вход")
-    return user
+    db_user = db.get(User, user["username"])
+    if not db_user:
+        raise HTTPException(status_code=401, detail="Требуется вход")
+    return {
+        "username": db_user.username,
+        "role": db_user.role,  # type: ignore[return-value]
+        "doctor_name": db_user.doctor_name,
+    }
 
 
 def can_access_doctor_record(user: UserInfo, doctor_name: str) -> bool:
     return user["role"] == "admin" or user["doctor_name"] == doctor_name
 
 
-def login_doctor_by_token(token: str | None) -> UserInfo | None:
-    username = _decode_login_token(token)
+def login_doctor_by_token(token: str | None, db: Session) -> UserInfo | None:
+    username, _next_path = _decode_login_token(token)
     if not username:
         return None
-    user = USERS.get(username)
-    if not user or user["role"] != "doctor":
+    user = db.get(User, username)
+    if not user or user.role != "doctor":
         return None
-    doctor_name = user["doctor_name"] or None
     return {
-        "username": username,
-        "role": user["role"],  # type: ignore[return-value]
-        "doctor_name": doctor_name,
+        "username": user.username,
+        "role": user.role,  # type: ignore[return-value]
+        "doctor_name": user.doctor_name,
     }
+
+
+def token_next_path(token: str | None) -> str:
+    _username, next_path = _decode_login_token(token)
+    return next_path or "/"

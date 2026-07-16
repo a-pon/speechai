@@ -24,8 +24,14 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db() -> None:
     from app import models  # noqa: F401
+    from app.auth import create_default_users
 
     Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        create_default_users(db)
+    finally:
+        db.close()
 
 
 def get_db():

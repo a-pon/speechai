@@ -52,6 +52,26 @@ class AuthUserOut(BaseModel):
     doctor_name: str | None
 
 
+class UserCreateIn(BaseModel):
+    username: str
+    role: str
+    password: str
+    doctor_name: str | None = None
+
+
+class UserUpdateIn(BaseModel):
+    role: str | None = None
+    password: str | None = None
+    doctor_name: str | None = None
+
+
+class UserOut(BaseModel):
+    username: str
+    role: str
+    doctor_name: str | None
+    login_link: str | None = None
+
+
 class OneCDoctorIn(BaseModel):
     code: str | None = None
     full_name: str | None = None

@@ -46,6 +46,17 @@ class Consultation(Base):
     )
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    username: Mapped[str] = mapped_column(String(255), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16))
+    doctor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class TranscriptSegment(Base):
     __tablename__ = "transcript_segments"
 
