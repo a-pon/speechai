@@ -1,5 +1,6 @@
 import json
 import shutil
+import subprocess
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -42,6 +43,28 @@ def _run_pipeline(consultation_id: str) -> None:
         db.close()
 
 
+def _normalize_browser_audio(src_path: Path) -> Path:
+    if src_path.suffix.lower() not in {".webm", ".ogg", ".m4a", ".mp4"}:
+        return src_path
+
+    normalized_path = src_path.with_suffix(".wav")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(src_path),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        str(normalized_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not normalized_path.exists():
+        raise HTTPException(400, "Не удалось обработать запись браузера")
+    return normalized_path
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_consultation(
     background_tasks: BackgroundTasks,
@@ -67,8 +90,8 @@ async def upload_consultation(
         raise HTTPException(400, "Файл не указан")
 
     ext = Path(file.filename).suffix.lower()
-    if ext not in {".mp3", ".wav", ".ogg", ".opus", ".m4a"}:
-        raise HTTPException(400, "Поддерживаются: mp3, wav, ogg, opus, m4a")
+    if ext not in {".mp3", ".wav", ".ogg", ".opus", ".m4a", ".webm", ".mp4"}:
+        raise HTTPException(400, "Поддерживаются: mp3, wav, ogg, opus, m4a, webm, mp4")
 
     settings = get_settings()
     consultation_id = str(uuid4())
@@ -78,6 +101,8 @@ async def upload_consultation(
 
     with dest_path.open("wb") as out:
         shutil.copyfileobj(file.file, out)
+
+    audio_path = _normalize_browser_audio(dest_path)
 
     normalized_doctor_name = doctor_name.strip()
     if user["role"] == "doctor":
@@ -101,7 +126,7 @@ async def upload_consultation(
         consultation_date=consultation_date,
         doctor_name=normalized_doctor_name,
         patient_name=patient_name.strip(),
-        audio_path=str(dest_path),
+        audio_path=str(audio_path),
         original_filename=file.filename,
         status="uploaded",
     )

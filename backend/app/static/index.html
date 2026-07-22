@@ -96,9 +96,19 @@
     <section id="upload-section" class="dev-only" hidden>
       <h2>Загрузить запись</h2>
       <p class="hint">Блок для разработки; в проде записи поступают с сервера автоматически.</p>
+      <div id="recording-panel" class="recording-panel" hidden>
+        <div class="inline-row">
+          <button type="button" id="record-start-button">Начать запись</button>
+          <button type="button" id="record-pause-button" hidden>Пауза</button>
+          <button type="button" id="record-stop-button" hidden>Остановить и отправить</button>
+        </div>
+        <p id="record-status" class="status">Микрофон не используется.</p>
+        <p id="record-timer" class="record-timer" hidden>00:00</p>
+        <p class="hint">После остановки запись отправится в обработку как обычная консультация.</p>
+      </div>
       <form id="upload-form">
         <label>Аудио (MP3)
-          <input type="file" name="file" accept=".mp3,.wav,.ogg,.opus,.m4a" required>
+          <input type="file" name="file" accept=".mp3,.wav,.ogg,.opus,.m4a,.webm" required>
         </label>
         <label id="doctor-name-label">Врач
           <input type="text" name="doctor_name" required placeholder="Иванов И.И.">

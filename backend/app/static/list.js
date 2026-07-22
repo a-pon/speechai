@@ -3,6 +3,12 @@ const loginForm = document.getElementById("login-form");
 const loginStatus = document.getElementById("login-status");
 const mainTabs = document.getElementById("main-tabs");
 const uploadSection = document.getElementById("upload-section");
+const recordingPanel = document.getElementById("recording-panel");
+const recordStartButton = document.getElementById("record-start-button");
+const recordPauseButton = document.getElementById("record-pause-button");
+const recordStopButton = document.getElementById("record-stop-button");
+const recordStatus = document.getElementById("record-status");
+const recordTimer = document.getElementById("record-timer");
 const uploadForm = document.getElementById("upload-form");
 const uploadStatus = document.getElementById("upload-status");
 const recordsSection = document.getElementById("records-section");
@@ -21,6 +27,12 @@ let pollTimer = null;
 let currentUser = null;
 let activeView = "upload";
 const authRetryDelayMs = 250;
+let recordStream = null;
+let recordRecorder = null;
+let recordChunks = [];
+let recordStartedAt = 0;
+let recordElapsedMs = 0;
+let recordTimerHandle = null;
 
 function formatIsoDate(value) {
   if (!value) return "";
@@ -52,6 +64,161 @@ function splitList(value) {
     .split(";")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function stopRecordTimer() {
+  if (recordTimerHandle) {
+    clearInterval(recordTimerHandle);
+    recordTimerHandle = null;
+  }
+}
+
+function updateRecordTimer() {
+  const elapsed = recordElapsedMs + (recordStartedAt ? Date.now() - recordStartedAt : 0);
+  const totalSec = Math.max(0, Math.floor(elapsed / 1000));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  recordTimer.textContent = `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+function setRecordUi(state) {
+  if (!recordingPanel) return;
+  recordingPanel.hidden = currentUser?.role !== "doctor";
+  if (state === "idle") {
+    recordStatus.textContent = "Микрофон не используется.";
+    recordTimer.hidden = true;
+    recordTimer.textContent = "00:00";
+    recordStartButton.hidden = false;
+    recordPauseButton.hidden = true;
+    recordStopButton.hidden = true;
+  } else if (state === "recording") {
+    recordStatus.textContent = "Запись идёт...";
+    recordTimer.hidden = false;
+    recordStartButton.hidden = true;
+    recordPauseButton.hidden = false;
+    recordPauseButton.textContent = "Пауза";
+    recordStopButton.hidden = false;
+  } else if (state === "paused") {
+    recordStatus.textContent = "Запись на паузе.";
+    recordTimer.hidden = false;
+    recordStartButton.hidden = true;
+    recordPauseButton.hidden = false;
+    recordPauseButton.textContent = "Продолжить";
+    recordStopButton.hidden = false;
+  } else if (state === "busy") {
+    recordStatus.textContent = "Отправляем запись...";
+    recordTimer.hidden = false;
+    recordStartButton.hidden = true;
+    recordPauseButton.hidden = true;
+    recordStopButton.hidden = true;
+  }
+}
+
+function cleanupRecording() {
+  stopRecordTimer();
+  recordStartedAt = 0;
+  recordElapsedMs = 0;
+  recordChunks = [];
+  recordRecorder = null;
+  if (recordStream) {
+    recordStream.getTracks().forEach((track) => track.stop());
+    recordStream = null;
+  }
+  setRecordUi("idle");
+}
+
+function getPreferredMimeType() {
+  const candidates = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm", "audio/ogg"];
+  return candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
+}
+
+async function sendRecordedAudio(blob, ext) {
+  setRecordUi("busy");
+  const fd = new FormData(uploadForm);
+  fd.set("file", new File([blob], `consultation.${ext}`, { type: blob.type || "application/octet-stream" }));
+  try {
+    const res = await apiFetch("/api/consultations/upload", { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "Ошибка загрузки записи");
+    cleanupRecording();
+    window.location.href = `/record/${data.id}`;
+  } catch (err) {
+    uploadStatus.textContent = "Ошибка: " + err.message;
+    setRecordUi("idle");
+    if (recordStream) {
+      recordStream.getTracks().forEach((track) => track.stop());
+      recordStream = null;
+    }
+    recordRecorder = null;
+  }
+}
+
+async function startRecording() {
+  uploadStatus.textContent = "";
+  try {
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      throw new Error("Браузер не поддерживает запись звука");
+    }
+    recordStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = getPreferredMimeType();
+    recordChunks = [];
+    recordRecorder = mimeType
+      ? new MediaRecorder(recordStream, { mimeType })
+      : new MediaRecorder(recordStream);
+    recordRecorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        recordChunks.push(event.data);
+      }
+    };
+    recordRecorder.onstop = () => {
+      if (!recordChunks.length) return;
+      const blob = new Blob(recordChunks, { type: recordRecorder?.mimeType || "audio/webm" });
+      const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
+      void sendRecordedAudio(blob, ext);
+    };
+    recordRecorder.start(1000);
+    recordElapsedMs = 0;
+    recordStartedAt = Date.now();
+    updateRecordTimer();
+    stopRecordTimer();
+    recordTimerHandle = setInterval(updateRecordTimer, 1000);
+    setRecordUi("recording");
+  } catch (err) {
+    cleanupRecording();
+    uploadStatus.textContent = "Ошибка: нет доступа к микрофону или он занят. " + err.message;
+  }
+}
+
+function togglePauseRecording() {
+  if (!recordRecorder) return;
+  if (recordRecorder.state === "recording") {
+    recordElapsedMs += Date.now() - recordStartedAt;
+    recordStartedAt = 0;
+    recordRecorder.pause();
+    stopRecordTimer();
+    setRecordUi("paused");
+  } else if (recordRecorder.state === "paused") {
+    recordRecorder.resume();
+    recordStartedAt = Date.now();
+    recordTimerHandle = setInterval(updateRecordTimer, 1000);
+    setRecordUi("recording");
+  }
+}
+
+function stopRecording() {
+  if (!recordRecorder || recordRecorder.state === "inactive") return;
+  if (recordRecorder.state === "recording") {
+    recordElapsedMs += Date.now() - recordStartedAt;
+    recordStartedAt = 0;
+  }
+  stopRecordTimer();
+  setRecordUi("busy");
+  try {
+    recordRecorder.stop();
+  } catch (err) {
+    uploadStatus.textContent = "Ошибка: " + err.message;
+    cleanupRecording();
+  }
 }
 
 function setView(view) {
@@ -365,6 +532,18 @@ uploadForm.addEventListener("submit", async (e) => {
   }
 });
 
+recordStartButton?.addEventListener("click", () => {
+  void startRecording();
+});
+
+recordPauseButton?.addEventListener("click", () => {
+  togglePauseRecording();
+});
+
+recordStopButton?.addEventListener("click", () => {
+  stopRecording();
+});
+
 async function initWorkspace() {
   if (!currentUser) return;
   loginSection.hidden = true;
@@ -388,6 +567,12 @@ async function initWorkspace() {
     doctorNameInput.removeAttribute("aria-readonly");
   }
   setView("upload");
+  if (recordingPanel) {
+    recordingPanel.hidden = currentUser.role !== "doctor";
+    if (currentUser.role === "doctor") {
+      setRecordUi("idle");
+    }
+  }
   await fetchConsultations();
   if (currentUser.role === "admin") {
     await loadUsers();
