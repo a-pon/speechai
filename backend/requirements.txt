@@ -6,3 +6,4 @@ pydantic-settings>=2.6.0
 python-multipart>=0.0.17
 httpx>=0.28.0
 mutagen>=1.47.0
+imageio-ffmpeg>=0.6.0

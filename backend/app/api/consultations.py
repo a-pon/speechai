@@ -18,6 +18,11 @@ from app.services.pipeline import process_consultation
 
 router = APIRouter(prefix="/api/consultations", tags=["consultations"])
 
+try:
+    from imageio_ffmpeg import get_ffmpeg_exe
+except ImportError:  # pragma: no cover - fallback for environments without the wheel
+    get_ffmpeg_exe = None
+
 
 def _parse_ddmmyyyy_to_date(value: str | None) -> date | None:
     if not value:
@@ -47,21 +52,32 @@ def _normalize_browser_audio(src_path: Path) -> Path:
     if src_path.suffix.lower() not in {".webm", ".ogg", ".m4a", ".mp4"}:
         return src_path
 
-    normalized_path = src_path.with_suffix(".wav")
+    normalized_path = src_path.with_suffix(".mp3")
+    ffmpeg_exe = get_ffmpeg_exe() if get_ffmpeg_exe else "ffmpeg"
     cmd = [
-        "ffmpeg",
+        ffmpeg_exe,
         "-y",
         "-i",
         str(src_path),
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
+        "-vn",
+        "-acodec",
+        "libmp3lame",
+        "-b:a",
+        "128k",
         str(normalized_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        raise HTTPException(500, "ffmpeg не найден в текущем окружении. Установите зависимость imageio-ffmpeg и повторите запуск.")
     if result.returncode != 0 or not normalized_path.exists():
-        raise HTTPException(400, "Не удалось обработать запись браузера")
+        stderr = (result.stderr or "").strip()
+        detail = "Не удалось обработать запись браузера"
+        if stderr:
+            detail = f"{detail}: {stderr}"
+        raise HTTPException(400, detail)
+    if src_path != normalized_path:
+        src_path.unlink(missing_ok=True)
     return normalized_path
 
 

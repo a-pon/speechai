@@ -66,6 +66,19 @@ function splitList(value) {
     .filter(Boolean);
 }
 
+function formatErrorMessage(err, fallback) {
+  if (!err) return fallback;
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message || fallback;
+  if (typeof err === "object") {
+    if (typeof err.detail === "string") return err.detail;
+    if (Array.isArray(err.detail)) return err.detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
+    if (err.detail != null) return JSON.stringify(err.detail);
+    return JSON.stringify(err);
+  }
+  return fallback;
+}
+
 function stopRecordTimer() {
   if (recordTimerHandle) {
     clearInterval(recordTimerHandle);
@@ -114,6 +127,46 @@ function setRecordUi(state) {
   }
 }
 
+function syncWorkspaceVisibility() {
+  const isDoctor = currentUser?.role === "doctor";
+  const isAdmin = currentUser?.role === "admin";
+
+  if (!currentUser) {
+    uploadSection.hidden = true;
+    onecSection.hidden = true;
+    recordingPanel.hidden = true;
+    recordsSection.hidden = true;
+    usersSection.hidden = true;
+    return;
+  }
+
+  if (activeView === "upload") {
+    uploadSection.hidden = !isDoctor;
+    onecSection.hidden = !isDoctor;
+    recordingPanel.hidden = !isDoctor;
+    recordsSection.hidden = true;
+    usersSection.hidden = true;
+    return;
+  }
+
+  if (activeView === "records") {
+    uploadSection.hidden = true;
+    onecSection.hidden = true;
+    recordingPanel.hidden = true;
+    recordsSection.hidden = false;
+    usersSection.hidden = true;
+    return;
+  }
+
+  if (activeView === "users") {
+    uploadSection.hidden = true;
+    onecSection.hidden = true;
+    recordingPanel.hidden = true;
+    recordsSection.hidden = true;
+    usersSection.hidden = !isAdmin;
+  }
+}
+
 function cleanupRecording() {
   stopRecordTimer();
   recordStartedAt = 0;
@@ -139,11 +192,14 @@ async function sendRecordedAudio(blob, ext) {
   try {
     const res = await apiFetch("/api/consultations/upload", { method: "POST", body: fd });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || "Ошибка загрузки записи");
+    if (!res.ok) {
+      const message = formatErrorMessage(data, "");
+      throw new Error(message || `HTTP ${res.status} ${res.statusText || ""}`.trim());
+    }
     cleanupRecording();
     window.location.href = `/record/${data.id}`;
   } catch (err) {
-    uploadStatus.textContent = "Ошибка: " + err.message;
+    uploadStatus.textContent = "Ошибка: " + formatErrorMessage(err, "Не удалось отправить запись");
     setRecordUi("idle");
     if (recordStream) {
       recordStream.getTracks().forEach((track) => track.stop());
@@ -185,7 +241,7 @@ async function startRecording() {
     setRecordUi("recording");
   } catch (err) {
     cleanupRecording();
-    uploadStatus.textContent = "Ошибка: нет доступа к микрофону или он занят. " + err.message;
+    uploadStatus.textContent = "Ошибка: нет доступа к микрофону или он занят. " + formatErrorMessage(err, "");
   }
 }
 
@@ -216,7 +272,7 @@ function stopRecording() {
   try {
     recordRecorder.stop();
   } catch (err) {
-    uploadStatus.textContent = "Ошибка: " + err.message;
+    uploadStatus.textContent = "Ошибка: " + formatErrorMessage(err, "Не удалось остановить запись");
     cleanupRecording();
   }
 }
@@ -225,9 +281,7 @@ function setView(view) {
   activeView = view;
   const buttons = mainTabs?.querySelectorAll("button[data-view]") || [];
   buttons.forEach((btn) => btn.classList.toggle("active", btn.dataset.view === view));
-  uploadSection.hidden = view !== "upload";
-  recordsSection.hidden = view !== "records";
-  usersSection.hidden = view !== "users" || !currentUser || currentUser.role !== "admin";
+  syncWorkspaceVisibility();
 }
 
 function setupTabs() {
@@ -551,6 +605,9 @@ async function initWorkspace() {
   mainTabs.querySelectorAll(".admin-only").forEach((node) => {
     node.hidden = currentUser.role !== "admin";
   });
+  mainTabs.querySelectorAll(".doctor-only").forEach((node) => {
+    node.hidden = currentUser.role !== "doctor";
+  });
   onecSection.hidden = currentUser.role !== "doctor";
   applyQueryToUploadForm();
   syncHiddenUploadFieldsFromQuery();
@@ -566,12 +623,12 @@ async function initWorkspace() {
     doctorNameInput.readOnly = false;
     doctorNameInput.removeAttribute("aria-readonly");
   }
-  setView("upload");
-  if (recordingPanel) {
-    recordingPanel.hidden = currentUser.role !== "doctor";
-    if (currentUser.role === "doctor") {
-      setRecordUi("idle");
-    }
+  const params = new URLSearchParams(window.location.search);
+  const requestedView = params.get("view");
+  const initialView = requestedView === "records" ? "records" : currentUser.role === "doctor" ? "upload" : "records";
+  setView(initialView);
+  if (currentUser.role === "doctor") {
+    setRecordUi("idle");
   }
   await fetchConsultations();
   if (currentUser.role === "admin") {
