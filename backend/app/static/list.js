@@ -141,7 +141,7 @@ function syncWorkspaceVisibility() {
   }
 
   if (activeView === "upload") {
-    uploadSection.hidden = !isDoctor;
+    uploadSection.hidden = false;
     onecSection.hidden = !isDoctor;
     recordingPanel.hidden = !isDoctor;
     recordsSection.hidden = true;
@@ -625,7 +625,7 @@ async function initWorkspace() {
   }
   const params = new URLSearchParams(window.location.search);
   const requestedView = params.get("view");
-  const initialView = requestedView === "records" ? "records" : currentUser.role === "doctor" ? "upload" : "records";
+  const initialView = requestedView === "records" ? "records" : "upload";
   setView(initialView);
   if (currentUser.role === "doctor") {
     setRecordUi("idle");
