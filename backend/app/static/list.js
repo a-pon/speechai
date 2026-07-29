@@ -142,8 +142,8 @@ function syncWorkspaceVisibility() {
 
   if (activeView === "upload") {
     uploadSection.hidden = false;
-    onecSection.hidden = !isDoctor;
-    recordingPanel.hidden = !isDoctor;
+    onecSection.hidden = false;
+    recordingPanel.hidden = false;
     recordsSection.hidden = true;
     usersSection.hidden = true;
     return;
@@ -608,7 +608,6 @@ async function initWorkspace() {
   mainTabs.querySelectorAll(".doctor-only").forEach((node) => {
     node.hidden = currentUser.role !== "doctor";
   });
-  onecSection.hidden = currentUser.role !== "doctor";
   applyQueryToUploadForm();
   syncHiddenUploadFieldsFromQuery();
   if (currentUser.role === "doctor") {
