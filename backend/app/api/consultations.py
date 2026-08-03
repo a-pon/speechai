@@ -87,7 +87,7 @@ async def upload_consultation(
     file: UploadFile = File(...),
     doctor_name: str = Form(""),
     patient_name: str = Form(...),
-    consultation_date: date = Form(...),
+    consultation_date: str = Form(...),
     source_system: str | None = Form(None),
     source_payload_json: str | None = Form(None),
     doctor_code: str | None = Form(None),
@@ -119,6 +119,9 @@ async def upload_consultation(
         shutil.copyfileobj(file.file, out)
 
     audio_path = _normalize_browser_audio(dest_path)
+    parsed_consultation_date = _parse_ddmmyyyy_to_date(consultation_date)
+    if not parsed_consultation_date:
+        raise HTTPException(400, "Дата консультации обязательна")
 
     normalized_doctor_name = doctor_name.strip()
     if user["role"] == "doctor":
@@ -139,7 +142,7 @@ async def upload_consultation(
         patient_gender=patient_gender,
         patient_phones_json=patient_phones_json,
         patient_emails_json=patient_emails_json,
-        consultation_date=consultation_date,
+        consultation_date=parsed_consultation_date,
         doctor_name=normalized_doctor_name,
         patient_name=patient_name.strip(),
         audio_path=str(audio_path),
