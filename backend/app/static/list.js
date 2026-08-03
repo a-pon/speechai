@@ -38,16 +38,18 @@ function formatIsoDate(value) {
   if (!value) return "";
   const trimmed = String(value).trim();
   if (!trimmed) return "";
-  const parts = trimmed.split("-");
-  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : trimmed;
+  return trimmed;
 }
 
 function formatDmyDate(value) {
   if (!value) return "";
   const trimmed = String(value).trim();
   if (!trimmed) return "";
-  const parts = trimmed.split("/");
-  return parts.length === 3 ? `${parts[2]}-${parts[1]}-${parts[0]}` : trimmed;
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return trimmed;
+  const dmyMatch = trimmed.match(/^(\d{2})[./-](\d{2})[./-](\d{4})$/);
+  if (dmyMatch) return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+  return trimmed;
 }
 
 function todayIsoLocal() {
@@ -389,7 +391,7 @@ function applyQueryToUploadForm() {
   if (patientFullName) {
     uploadForm.querySelector('[name="patient_name"]').value = patientFullName;
   }
-  consultationDateInput.value = formatDmyDate(todayIsoLocal());
+  consultationDateInput.value = todayIsoLocal();
   if (currentUser?.role === "admin" && params.get("consultation_date")) {
     consultationDateInput.value = formatDmyDate(params.get("consultation_date"));
   }

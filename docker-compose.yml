@@ -10,8 +10,8 @@ services:
       YANDEX_API_KEY: "${YANDEX_API_KEY:-}"
       YANDEX_FOLDER_ID: "${YANDEX_FOLDER_ID:-}"
       YANDEXGPT_MODEL: "${YANDEXGPT_MODEL:-yandexgpt}"
-      DATABASE_URL: "${DATABASE_URL:-sqlite:////data/speechai.db}"
-      AUDIO_DIR: "${AUDIO_DIR:-/data/audio}"
+      DATABASE_URL: "sqlite:////data/speechai.db"
+      AUDIO_DIR: "/data/audio"
       SESSION_SECRET: "${SESSION_SECRET:-change-me}"
     volumes:
       - ./volumes/data:/data
