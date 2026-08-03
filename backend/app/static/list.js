@@ -626,7 +626,7 @@ async function initWorkspace() {
   const requestedView = params.get("view");
   const initialView = requestedView === "records" ? "records" : "upload";
   setView(initialView);
-  if (currentUser.role === "doctor") {
+  if (initialView === "upload") {
     setRecordUi("idle");
   }
   await fetchConsultations();
