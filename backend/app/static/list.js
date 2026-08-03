@@ -389,7 +389,7 @@ function applyQueryToUploadForm() {
   if (patientFullName) {
     uploadForm.querySelector('[name="patient_name"]').value = patientFullName;
   }
-  consultationDateInput.value = todayIsoLocal();
+  consultationDateInput.value = formatDmyDate(todayIsoLocal());
   if (currentUser?.role === "admin" && params.get("consultation_date")) {
     consultationDateInput.value = formatDmyDate(params.get("consultation_date"));
   }
@@ -449,7 +449,7 @@ function applyOnecToUploadForm() {
     if (input) input.value = value;
   });
   const normalizedConsultationDate = formatDmyDate(String(fd.get("consultation_date") || "").trim());
-  consultationDateInput.value = normalizedConsultationDate || todayIsoLocal();
+  consultationDateInput.value = normalizedConsultationDate || formatDmyDate(todayIsoLocal());
 }
 
 async function fetchConsultations() {
