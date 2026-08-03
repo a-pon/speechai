@@ -79,6 +79,42 @@ function formatErrorMessage(err, fallback) {
   return fallback;
 }
 
+function buildUploadFormData() {
+  const fd = new FormData();
+  const fileInput = uploadForm.querySelector('[name="file"]');
+  const file = fileInput?.files?.[0];
+  if (!file) {
+    throw new Error("Выберите аудиофайл");
+  }
+  fd.append("file", file, file.name || "consultation.mp3");
+
+  const fields = [
+    "doctor_name",
+    "patient_name",
+    "consultation_date",
+    "source_system",
+    "source_payload_json",
+    "doctor_code",
+    "doctor_position",
+    "doctor_category",
+    "patient_code",
+    "patient_birth_date",
+    "patient_age",
+    "patient_gender",
+    "patient_phones_json",
+    "patient_emails_json",
+  ];
+
+  fields.forEach((name) => {
+    const input = uploadForm.querySelector(`[name="${name}"]`);
+    if (!input) return;
+    const value = String(input.value ?? "").trim();
+    if (value) fd.append(name, value);
+  });
+
+  return fd;
+}
+
 function stopRecordTimer() {
   if (recordTimerHandle) {
     clearInterval(recordTimerHandle);
@@ -187,7 +223,7 @@ function getPreferredMimeType() {
 
 async function sendRecordedAudio(blob, ext) {
   setRecordUi("busy");
-  const fd = new FormData(uploadForm);
+  const fd = buildUploadFormData();
   fd.set("file", new File([blob], `consultation.${ext}`, { type: blob.type || "application/octet-stream" }));
   try {
     const res = await apiFetch("/api/consultations/upload", { method: "POST", body: fd });
@@ -576,14 +612,14 @@ loginForm.addEventListener("submit", async (e) => {
 uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   uploadStatus.textContent = "Загрузка…";
-  const fd = new FormData(uploadForm);
   try {
+    const fd = buildUploadFormData();
     const res = await apiFetch("/api/consultations/upload", { method: "POST", body: fd });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Ошибка загрузки");
     window.location.href = `/record/${data.id}`;
   } catch (err) {
-    uploadStatus.textContent = "Ошибка: " + err.message;
+    uploadStatus.textContent = "Ошибка: " + formatErrorMessage(err, "Ошибка загрузки");
   }
 });
 
