@@ -81,6 +81,18 @@ def _normalize_browser_audio(src_path: Path) -> Path:
     return normalized_path
 
 
+def _parse_optional_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except ValueError as exc:
+        raise HTTPException(400, "Числовое поле заполнено некорректно") from exc
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_consultation(
     background_tasks: BackgroundTasks,
@@ -95,7 +107,7 @@ async def upload_consultation(
     doctor_category: str | None = Form(None),
     patient_code: str | None = Form(None),
     patient_birth_date: str | None = Form(None),
-    patient_age: int | None = Form(None),
+    patient_age: str | None = Form(None),
     patient_gender: str | None = Form(None),
     patient_phones_json: str | None = Form(None),
     patient_emails_json: str | None = Form(None),
@@ -138,7 +150,7 @@ async def upload_consultation(
         doctor_category=doctor_category,
         patient_code=patient_code,
         patient_birth_date=_parse_ddmmyyyy_to_date(patient_birth_date),
-        patient_age=patient_age,
+        patient_age=_parse_optional_int(patient_age),
         patient_gender=patient_gender,
         patient_phones_json=patient_phones_json,
         patient_emails_json=patient_emails_json,
