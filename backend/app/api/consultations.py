@@ -93,6 +93,19 @@ def _parse_optional_int(value: str | None) -> int | None:
         raise HTTPException(400, "Числовое поле заполнено некорректно") from exc
 
 
+def _remove_consultation_files(consultation_id: str, audio_path: Path, settings_audio_dir: Path) -> None:
+    id_dir = settings_audio_dir / consultation_id
+    if id_dir.is_dir():
+        shutil.rmtree(id_dir)
+
+    if audio_path.is_file():
+        audio_path.unlink(missing_ok=True)
+
+    parent = audio_path.parent
+    if parent.is_dir() and parent != settings_audio_dir and not any(parent.iterdir()):
+        parent.rmdir()
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_consultation(
     background_tasks: BackgroundTasks,
@@ -215,14 +228,7 @@ def delete_consultation(
     db.delete(row)
     db.commit()
 
-    id_dir = settings.audio_dir / consultation_id
-    if id_dir.is_dir():
-        shutil.rmtree(id_dir)
-    elif audio_path.is_file():
-        audio_path.unlink(missing_ok=True)
-        parent = audio_path.parent
-        if parent.is_dir() and parent != settings.audio_dir and not any(parent.iterdir()):
-            parent.rmdir()
+    _remove_consultation_files(consultation_id, audio_path, settings.audio_dir)
 
     return {"ok": True, "message": "Запись удалена"}
 
