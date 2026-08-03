@@ -412,7 +412,8 @@ function applyOnecToUploadForm() {
     const input = uploadForm.querySelector(`[name="${name}"]`);
     if (input) input.value = value;
   });
-  consultationDateInput.value = String(fd.get("consultation_date") || "").trim() || todayIsoLocal();
+  const normalizedConsultationDate = formatDmyDate(String(fd.get("consultation_date") || "").trim());
+  consultationDateInput.value = normalizedConsultationDate || todayIsoLocal();
 }
 
 async function fetchConsultations() {
