@@ -110,6 +110,16 @@ function formatErrorMessage(err, fallback) {
   return fallback;
 }
 
+async function readApiResponseData(res) {
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return res.json().catch(() => ({}));
+  }
+  const text = await res.text().catch(() => "");
+  const detail = text.trim();
+  return detail ? { detail: detail.slice(0, 500) } : {};
+}
+
 function buildUploadFormData() {
   const fd = new FormData();
   const fileInput = uploadForm.querySelector('[name="file"]');
@@ -688,8 +698,8 @@ uploadForm.addEventListener("submit", async (e) => {
   try {
     const fd = buildUploadFormData();
     const res = await apiFetch("/api/consultations/upload", { method: "POST", body: fd });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Ошибка загрузки");
+    const data = await readApiResponseData(res);
+    if (!res.ok) throw new Error(formatErrorMessage(data, `HTTP ${res.status} ${res.statusText || ""}`.trim()));
     window.location.href = `/record/${data.id}`;
   } catch (err) {
     uploadStatus.textContent = "Ошибка: " + formatErrorMessage(err, "Ошибка загрузки");
