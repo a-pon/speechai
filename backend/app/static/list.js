@@ -387,6 +387,39 @@ function syncHiddenUploadFieldsFromQuery() {
   }
 }
 
+function syncOnecFormFromQuery() {
+  if (!onecForm) return;
+  const params = new URLSearchParams(window.location.search);
+  const queryMap = {
+    consultation_date: "consultation_date",
+    doctor_code: "doctor_code",
+    doctor_full_name: "doctor_full_name",
+    doctor_position: "doctor_position",
+    doctor_category: "doctor_category",
+    patient_code: "patient_code",
+    patient_full_name: "patient_full_name",
+    patient_birth_date: "patient_birth_date",
+    patient_age: "patient_age",
+    patient_gender: "patient_gender",
+    patient_phones: "patient_phones",
+    patient_emails: "patient_emails",
+  };
+
+  Object.entries(queryMap).forEach(([paramName, fieldName]) => {
+    const input = onecForm.querySelector(`[name="${fieldName}"]`);
+    if (!input) return;
+    const value = params.get(paramName);
+    if (value == null) return;
+    if (fieldName === "consultation_date" || fieldName === "patient_birth_date") {
+      input.value = formatDmyDate(value);
+    } else if (fieldName === "patient_phones" || fieldName === "patient_emails") {
+      input.value = splitList(value).join("\n");
+    } else {
+      input.value = value;
+    }
+  });
+}
+
 function applyQueryToUploadForm() {
   const params = new URLSearchParams(window.location.search);
   const doctorFullName = params.get("doctor_full_name") || currentUser?.doctor_name || currentUser?.username || "";
@@ -653,6 +686,7 @@ async function initWorkspace() {
   });
   applyQueryToUploadForm();
   syncHiddenUploadFieldsFromQuery();
+  syncOnecFormFromQuery();
   if (currentUser.role === "doctor") {
     onecForm.addEventListener("input", applyOnecToUploadForm);
     applyOnecToUploadForm();
