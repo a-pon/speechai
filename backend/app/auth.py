@@ -180,6 +180,32 @@ def _load_doctor_link_token(db: Session, token: str | None) -> DoctorLinkToken |
     return link
 
 
+def _decode_legacy_doctor_link_token(token: str | None) -> tuple[str | None, str]:
+    if not token or "." not in token:
+        return None, "/"
+    encoded, signature = token.rsplit(".", 1)
+    if not hmac.compare_digest(_sign(encoded), signature):
+        return None, "/"
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError):
+        return None, "/"
+    username = str(payload.get("username") or "").strip()
+    next_path = str(payload.get("next") or "/").strip() or "/"
+    expires_at_raw = str(payload.get("expires_at") or "").strip()
+    if not username or not expires_at_raw:
+        return None, "/"
+    try:
+        expires_at = datetime.fromisoformat(expires_at_raw)
+    except ValueError:
+        return None, "/"
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        return None, "/"
+    return username, next_path
+
+
 def _decode_user(cookie_value: str | None) -> UserInfo | None:
     if not cookie_value or "." not in cookie_value:
         return None
@@ -235,9 +261,13 @@ def can_access_doctor_record(user: UserInfo, doctor_name: str) -> bool:
 
 def login_doctor_by_token(token: str | None, db: Session) -> UserInfo | None:
     link = _load_doctor_link_token(db, token)
-    if not link:
-        return None
-    user = db.get(User, link.username)
+    if link:
+        user = db.get(User, link.username)
+    else:
+        username, _next_path = _decode_legacy_doctor_link_token(token)
+        if not username:
+            return None
+        user = db.get(User, username)
     if not user or user.role != "doctor":
         return None
     return {
@@ -254,13 +284,15 @@ def token_next_path(token: str | None, db: Session | None = None) -> str:
         try:
             link = _load_doctor_link_token(db, token)
             if not link:
-                return "/"
+                _username, next_path = _decode_legacy_doctor_link_token(token)
+                return next_path or "/"
             return link.next_path or "/"
         finally:
             db.close()
     link = _load_doctor_link_token(db, token)
     if not link:
-        return "/"
+        _username, next_path = _decode_legacy_doctor_link_token(token)
+        return next_path or "/"
     return link.next_path or "/"
 
 
