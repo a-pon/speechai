@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -8,9 +7,7 @@ from app.auth import (
     build_doctor_login_link,
     clear_login_cookie,
     get_current_user,
-    login_doctor_by_token,
     set_login_cookie,
-    token_next_path,
 )
 from app.db import get_db
 
@@ -58,14 +55,3 @@ def doctor_link(request: Request, username: str, user=Depends(get_current_user))
         raise HTTPException(status_code=404, detail="Пользователь врача не найден")
 
     return DoctorLinkResponse(username=username, link=link)
-
-
-@router.get("/link-doctor")
-def login_doctor(token: str, next: str = "/", db: Session = Depends(get_db)):
-    user = login_doctor_by_token(token, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="Ссылка недействительна или устарела")
-
-    redirect = RedirectResponse(url=next or token_next_path(token), status_code=302)
-    set_login_cookie(redirect, user)
-    return redirect

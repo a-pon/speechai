@@ -4,7 +4,8 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
-from app.auth import build_doctor_login_link, get_current_user
+from app.auth import build_doctor_login_link, get_current_user, login_doctor_by_token, set_login_cookie, token_next_path
+from app.db import get_db
 from app.schemas import OneCConsultationIn, OneCConsultationOut, OneCDoctorIn, OneCPatientIn
 
 router = APIRouter(prefix="/api/integration", tags=["integration"])
@@ -45,6 +46,40 @@ def _parse_ddmmyyyy(value: str | None) -> str | None:
     return normalized
 
 
+def _consultation_query_params(
+    consultation_date: str | None = None,
+    doctor_code: str | None = None,
+    doctor_full_name: str | None = None,
+    doctor_position: str | None = None,
+    doctor_category: str | None = None,
+    patient_code: str | None = None,
+    patient_full_name: str | None = None,
+    patient_birth_date: str | None = None,
+    patient_age: int | None = None,
+    patient_gender: str | None = None,
+    patient_phones: str | None = None,
+    patient_emails: str | None = None,
+) -> dict[str, str | int]:
+    return {
+        key: value
+        for key, value in {
+            "consultation_date": consultation_date,
+            "doctor_code": doctor_code,
+            "doctor_full_name": doctor_full_name,
+            "doctor_position": doctor_position,
+            "doctor_category": doctor_category,
+            "patient_code": patient_code,
+            "patient_full_name": patient_full_name,
+            "patient_birth_date": patient_birth_date,
+            "patient_age": patient_age,
+            "patient_gender": patient_gender,
+            "patient_phones": patient_phones,
+            "patient_emails": patient_emails,
+        }.items()
+        if value not in (None, "")
+    }
+
+
 @router.get("/1c-link")
 def open_1c_link(
     consultation_date: str | None = None,
@@ -81,9 +116,11 @@ def open_1c_link(
     return RedirectResponse(url="/?" + urlencode(params, doseq=True), status_code=307)
 
 
-@router.get("/doctor-entry")
-def open_doctor_entry(
-    username: str,
+@router.get("/link-doctor")
+def link_doctor(
+    username: str | None = None,
+    token: str | None = None,
+    next: str = "/",
     consultation_date: str | None = None,
     doctor_code: str | None = None,
     doctor_full_name: str | None = None,
@@ -96,30 +133,45 @@ def open_doctor_entry(
     patient_gender: str | None = None,
     patient_phones: str | None = None,
     patient_emails: str | None = None,
+    db=Depends(get_db),
 ):
-    params = {
-        key: value
-        for key, value in {
-            "consultation_date": consultation_date,
-            "doctor_code": doctor_code,
-            "doctor_full_name": doctor_full_name,
-            "doctor_position": doctor_position,
-            "doctor_category": doctor_category,
-            "patient_code": patient_code,
-            "patient_full_name": patient_full_name,
-            "patient_birth_date": patient_birth_date,
-            "patient_age": patient_age,
-            "patient_gender": patient_gender,
-            "patient_phones": patient_phones,
-            "patient_emails": patient_emails,
-        }.items()
-        if value not in (None, "")
-    }
-    next_path = "/?" + urlencode(params, doseq=True)
-    link = build_doctor_login_link(username, None, next_path=next_path)
-    if not link:
-        raise HTTPException(404, "Пользователь врача не найден")
-    return RedirectResponse(url=link, status_code=307)
+    params = _consultation_query_params(
+        consultation_date=consultation_date,
+        doctor_code=doctor_code,
+        doctor_full_name=doctor_full_name,
+        doctor_position=doctor_position,
+        doctor_category=doctor_category,
+        patient_code=patient_code,
+        patient_full_name=patient_full_name,
+        patient_birth_date=patient_birth_date,
+        patient_age=patient_age,
+        patient_gender=patient_gender,
+        patient_phones=patient_phones,
+        patient_emails=patient_emails,
+    )
+
+    if not token:
+        if not username:
+            raise HTTPException(status_code=400, detail="Требуется username или token")
+        next_path = next or "/"
+        link = build_doctor_login_link(username, None, next_path=next_path)
+        if not link:
+            raise HTTPException(404, "Пользователь врача не найден")
+        if params:
+            link = f"{link}&{urlencode(params, doseq=True)}"
+        return RedirectResponse(url=link, status_code=307)
+
+    user = login_doctor_by_token(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="Ссылка недействительна или устарела")
+
+    target = next or token_next_path(token) or "/"
+    if params:
+        target = f"{target}{'&' if '?' in target else '?'}{urlencode(params, doseq=True)}"
+
+    redirect = RedirectResponse(url=target, status_code=302)
+    set_login_cookie(redirect, user)
+    return redirect
 
 
 @router.get("/1c", response_model=OneCConsultationOut)

@@ -97,6 +97,7 @@ flowchart LR
 | POST | `/api/auth/login` | Вход в админку |
 | POST | `/api/auth/logout` | Выход |
 | GET | `/api/auth/me` | Текущий пользователь |
+| GET | `/api/integration/link-doctor` | Вход врача по подписанной ссылке + автозаполнение формы |
 | POST | `/api/consultations/upload` | Загрузка MP3 + метаданные |
 | GET | `/api/consultations` | Список с учётом роли |
 | GET | `/api/consultations/{id}` | Карточка с учётом роли |

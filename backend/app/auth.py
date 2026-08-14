@@ -135,7 +135,7 @@ def build_doctor_login_link(username: str, base_url: str | None = None, next_pat
         return None
     expires_at = datetime.now(timezone.utc) + timedelta(days=30)
     token = _build_login_token(username.strip(), expires_at, next_path=next_path)
-    path = f"/api/auth/link-doctor?{urlencode({'token': token, 'next': next_path or '/'})}"
+    path = f"/api/integration/link-doctor?{urlencode({'token': token, 'next': next_path or '/'})}"
     return f"{base_url.rstrip('/')}{path}" if base_url else path
 
 

@@ -11,5 +11,4 @@ data/
 tmp/
 volumes/
 docs/
-docs/INSTRUCTIONS.md
 .github/*.local
