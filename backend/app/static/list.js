@@ -72,6 +72,31 @@ function splitList(value) {
     .filter(Boolean);
 }
 
+async function copyText(text) {
+  const value = String(text || "");
+  if (!value) throw new Error("Пустая ссылка");
+
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const fallbackInput = document.createElement("textarea");
+  fallbackInput.value = value;
+  fallbackInput.setAttribute("readonly", "true");
+  fallbackInput.style.position = "fixed";
+  fallbackInput.style.top = "-9999px";
+  fallbackInput.style.left = "-9999px";
+  document.body.appendChild(fallbackInput);
+  fallbackInput.focus();
+  fallbackInput.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(fallbackInput);
+  if (!copied) {
+    throw new Error("Не удалось скопировать ссылку");
+  }
+}
+
 function formatErrorMessage(err, fallback) {
   if (!err) return fallback;
   if (typeof err === "string") return err;
@@ -563,9 +588,18 @@ async function loadUsers() {
     `;
     tr.querySelector(".btn-link").addEventListener("click", async () => {
       const link = tr.querySelector(".u-link").value;
-      await navigator.clipboard.writeText(link);
-      userCreateStatus.textContent = "Ссылка скопирована";
-      setTimeout(() => (userCreateStatus.textContent = ""), 1200);
+      try {
+        await copyText(link);
+        userCreateStatus.textContent = "Ссылка скопирована";
+      } catch (err) {
+        userCreateStatus.textContent = "Ошибка: " + formatErrorMessage(err, "Не удалось скопировать ссылку");
+      } finally {
+        setTimeout(() => {
+          if (userCreateStatus.textContent === "Ссылка скопирована") {
+            userCreateStatus.textContent = "";
+          }
+        }, 1200);
+      }
     });
     tr.querySelector(".btn-save").addEventListener("click", async () => {
       try {
