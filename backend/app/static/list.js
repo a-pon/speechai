@@ -34,6 +34,10 @@ let recordStartedAt = 0;
 let recordElapsedMs = 0;
 let recordTimerHandle = null;
 
+function canViewAllRecords(user) {
+  return user?.role === "admin" || user?.can_view_all_records === true;
+}
+
 function formatIsoDate(value) {
   if (!value) return "";
   const trimmed = String(value).trim();
@@ -460,7 +464,7 @@ async function fetchConsultations() {
   listBody.innerHTML = "";
   items.forEach((item) => {
     const tr = document.createElement("tr");
-    const canDelete = currentUser && (currentUser.role === "admin" || currentUser.doctor_name === item.doctor_name);
+    const canDelete = currentUser && (canViewAllRecords(currentUser) || currentUser.doctor_name === item.doctor_name);
     tr.innerHTML = `
       <td>${item.consultation_date}</td>
       <td>${escapeHtml(item.patient_name)}</td>
@@ -663,7 +667,12 @@ async function initWorkspace() {
   }
   const params = new URLSearchParams(window.location.search);
   const requestedView = params.get("view");
-  const initialView = requestedView === "records" ? "records" : "upload";
+  const initialView =
+    requestedView === "records" && canViewAllRecords(currentUser)
+      ? "records"
+      : requestedView === "users" && currentUser.role === "admin"
+        ? "users"
+        : "upload";
   setView(initialView);
   if (initialView === "upload") {
     setRecordUi("idle");

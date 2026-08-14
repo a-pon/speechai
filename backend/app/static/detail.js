@@ -8,6 +8,10 @@ let pollTimer = null;
 let currentUser = null;
 const authRetryDelayMs = 250;
 
+function canViewAllRecords(user) {
+  return user?.role === "admin" || user?.can_view_all_records === true;
+}
+
 async function loadDetail() {
   const res = await apiFetch(`/api/consultations/${consultationId}`);
   if (!res.ok) {
@@ -22,7 +26,7 @@ async function loadDetail() {
 
   document.title = `${data.patient_name} — SpeechAI`;
 
-  const canDelete = currentUser && (currentUser.role === "admin" || currentUser.doctor_name === data.doctor_name);
+  const canDelete = currentUser && (canViewAllRecords(currentUser) || currentUser.doctor_name === data.doctor_name);
   detailHeader.innerHTML = `
     <div class="meta">
       <div><strong>Пациент:</strong> ${escapeHtml(data.patient_name)}</div>

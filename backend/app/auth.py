@@ -21,6 +21,7 @@ class UserInfo(TypedDict):
     username: str
     role: Literal["admin", "doctor"]
     doctor_name: str | None
+    can_view_all_records: bool
 
 
 DEFAULT_USERS: list[dict[str, str]] = [
@@ -30,6 +31,8 @@ DEFAULT_USERS: list[dict[str, str]] = [
     {"username": "Иваненчук Иван", "password": "X4c9Wz2D", "role": "doctor", "doctor_name": "Иваненчук Иван"},
     {"username": "Корнилова Анастасия", "password": "P5t7Jn8A", "role": "doctor", "doctor_name": "Корнилова Анастасия"},
 ]
+
+FULL_RECORD_ACCESS_USERS = {"Кухтарская Татьяна"}
 
 
 def _password_hash(password: str) -> str:
@@ -76,6 +79,7 @@ def authenticate_user(db: Session, username: str, password: str) -> UserInfo | N
         "username": user.username,
         "role": user.role,  # type: ignore[return-value]
         "doctor_name": user.doctor_name,
+        "can_view_all_records": user.username in FULL_RECORD_ACCESS_USERS or user.role == "admin",
     }
 
 
@@ -93,6 +97,7 @@ def _normalize_user(user: UserInfo | dict) -> UserInfo | None:
         "username": username,
         "role": role,
         "doctor_name": doctor_name,
+        "can_view_all_records": bool(user.get("can_view_all_records", False) or username in FULL_RECORD_ACCESS_USERS or role == "admin"),
     }
 
 
@@ -201,11 +206,16 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> UserInf
         "username": db_user.username,
         "role": db_user.role,  # type: ignore[return-value]
         "doctor_name": db_user.doctor_name,
+        "can_view_all_records": db_user.username in FULL_RECORD_ACCESS_USERS or db_user.role == "admin",
     }
 
 
+def can_view_all_records(user: UserInfo) -> bool:
+    return bool(user.get("can_view_all_records") or user["role"] == "admin")
+
+
 def can_access_doctor_record(user: UserInfo, doctor_name: str) -> bool:
-    return user["role"] == "admin" or user["doctor_name"] == doctor_name
+    return can_view_all_records(user) or user["doctor_name"] == doctor_name
 
 
 def login_doctor_by_token(token: str | None, db: Session) -> UserInfo | None:
@@ -219,6 +229,7 @@ def login_doctor_by_token(token: str | None, db: Session) -> UserInfo | None:
         "username": user.username,
         "role": user.role,  # type: ignore[return-value]
         "doctor_name": user.doctor_name,
+        "can_view_all_records": user.username in FULL_RECORD_ACCESS_USERS or user.role == "admin",
     }
 
 

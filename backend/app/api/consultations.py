@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.auth import can_access_doctor_record, get_current_user
+from app.auth import can_access_doctor_record, can_view_all_records, get_current_user
 from app.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import Consultation
@@ -189,7 +189,7 @@ async def upload_consultation(
 @router.get("", response_model=list[ConsultationListItem])
 def list_consultations(db: Session = Depends(get_db), user=Depends(get_current_user)):
     query = select(Consultation).order_by(Consultation.created_at.desc())
-    if user["role"] == "doctor":
+    if not can_view_all_records(user):
         query = query.where(Consultation.doctor_name == user["doctor_name"])
 
     rows = db.scalars(query).all()
