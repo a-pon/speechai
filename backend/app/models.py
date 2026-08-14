@@ -57,6 +57,17 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class DoctorLinkToken(Base):
+    __tablename__ = "doctor_link_tokens"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(255), index=True)
+    next_path: Mapped[str] = mapped_column(String(512), default="/")
+    payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class TranscriptSegment(Base):
     __tablename__ = "transcript_segments"
 

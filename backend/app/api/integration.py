@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
-from app.auth import build_doctor_login_link, get_current_user, login_doctor_by_token, set_login_cookie, token_next_path
+from app.auth import build_doctor_login_link, get_current_user, login_doctor_by_token, set_login_cookie, token_next_path, token_payload
 from app.db import get_db
 from app.schemas import OneCConsultationIn, OneCConsultationOut, OneCDoctorIn, OneCPatientIn
 
@@ -154,19 +154,20 @@ def link_doctor(
         if not username:
             raise HTTPException(status_code=400, detail="Требуется username или token")
         next_path = next or "/"
-        link = build_doctor_login_link(username, None, next_path=next_path)
+        link = build_doctor_login_link(username, None, next_path=next_path, payload=params)
         if not link:
             raise HTTPException(404, "Пользователь врача не найден")
-        if params:
-            link = f"{link}&{urlencode(params, doseq=True)}"
         return RedirectResponse(url=link, status_code=307)
 
     user = login_doctor_by_token(token, db)
     if not user:
         raise HTTPException(status_code=401, detail="Ссылка недействительна или устарела")
 
-    target = next or token_next_path(token) or "/"
-    if params:
+    stored_params = token_payload(token, db)
+    target = next or token_next_path(token, db) or "/"
+    if stored_params:
+        target = f"{target}{'&' if '?' in target else '?'}{urlencode(stored_params, doseq=True)}"
+    elif params:
         target = f"{target}{'&' if '?' in target else '?'}{urlencode(params, doseq=True)}"
 
     redirect = RedirectResponse(url=target, status_code=302)

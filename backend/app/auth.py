@@ -5,14 +5,13 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Literal, TypedDict
-from urllib.parse import urlencode
 
 from fastapi import Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import SessionLocal, get_db
-from app.models import User
+from app.models import DoctorLinkToken, User
 
 AUTH_COOKIE_NAME = "speechai_auth"
 
@@ -113,56 +112,72 @@ def _encode_user(user: UserInfo) -> str:
     return f"{encoded}.{signature}"
 
 
-def _build_login_token(username: str, expires_at: datetime, next_path: str | None = None) -> str:
-    payload = {
-        "username": username,
-        "expires_at": expires_at.isoformat(),
-        "next": next_path or "/",
-    }
-    raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-    encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
-    signature = _sign(encoded)
-    return f"{encoded}.{signature}"
+def _build_doctor_link_payload(payload: dict[str, object] | None) -> str | None:
+    if not payload:
+        return None
+    cleaned = {key: value for key, value in payload.items() if value not in (None, "")}
+    if not cleaned:
+        return None
+    return json.dumps(cleaned, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
-def build_doctor_login_link(username: str, base_url: str | None = None, next_path: str | None = None) -> str | None:
+def _issue_doctor_link_token(
+    db: Session,
+    username: str,
+    next_path: str | None = None,
+    payload: dict[str, object] | None = None,
+) -> str:
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+    next_value = next_path or "/"
+    payload_json = _build_doctor_link_payload(payload)
+    for _ in range(10):
+        token = secrets.token_urlsafe(12)
+        if db.get(DoctorLinkToken, token):
+            continue
+        db.add(
+            DoctorLinkToken(
+                token=token,
+                username=username,
+                next_path=next_value,
+                payload_json=payload_json,
+                expires_at=expires_at,
+            )
+        )
+        db.commit()
+        return token
+    raise RuntimeError("Не удалось сгенерировать токен входа врача")
+
+
+def build_doctor_login_link(
+    username: str,
+    base_url: str | None = None,
+    next_path: str | None = None,
+    payload: dict[str, object] | None = None,
+) -> str | None:
     db = SessionLocal()
     try:
         user = db.get(User, username.strip())
+        if not user or user.role != "doctor":
+            return None
+        token = _issue_doctor_link_token(db, username.strip(), next_path=next_path, payload=payload)
     finally:
         db.close()
-    if not user or user.role != "doctor":
-        return None
-    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
-    token = _build_login_token(username.strip(), expires_at, next_path=next_path)
-    path = f"/api/integration/link-doctor?{urlencode({'token': token, 'next': next_path or '/'})}"
+    path = f"/api/integration/link-doctor?token={token}"
     return f"{base_url.rstrip('/')}{path}" if base_url else path
 
 
-def _decode_login_token(token: str | None) -> tuple[str | None, str]:
-    if not token or "." not in token:
-        return None, "/"
-    encoded, signature = token.rsplit(".", 1)
-    if not hmac.compare_digest(_sign(encoded), signature):
-        return None, "/"
-    try:
-        payload = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8"))
-    except (ValueError, json.JSONDecodeError):
-        return None, "/"
-    username = str(payload.get("username") or "").strip()
-    expires_at_raw = str(payload.get("expires_at") or "").strip()
-    next_path = str(payload.get("next") or "/").strip() or "/"
-    if not username or not expires_at_raw:
-        return None, "/"
-    try:
-        expires_at = datetime.fromisoformat(expires_at_raw)
-    except ValueError:
-        return None, "/"
+def _load_doctor_link_token(db: Session, token: str | None) -> DoctorLinkToken | None:
+    if not token:
+        return None
+    link = db.get(DoctorLinkToken, token.strip())
+    if not link:
+        return None
+    expires_at = link.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at < datetime.now(timezone.utc):
-        return None, "/"
-    return username, next_path
+        return None
+    return link
 
 
 def _decode_user(cookie_value: str | None) -> UserInfo | None:
@@ -219,10 +234,10 @@ def can_access_doctor_record(user: UserInfo, doctor_name: str) -> bool:
 
 
 def login_doctor_by_token(token: str | None, db: Session) -> UserInfo | None:
-    username, _next_path = _decode_login_token(token)
-    if not username:
+    link = _load_doctor_link_token(db, token)
+    if not link:
         return None
-    user = db.get(User, username)
+    user = db.get(User, link.username)
     if not user or user.role != "doctor":
         return None
     return {
@@ -233,6 +248,28 @@ def login_doctor_by_token(token: str | None, db: Session) -> UserInfo | None:
     }
 
 
-def token_next_path(token: str | None) -> str:
-    _username, next_path = _decode_login_token(token)
-    return next_path or "/"
+def token_next_path(token: str | None, db: Session | None = None) -> str:
+    if db is None:
+        db = SessionLocal()
+        try:
+            link = _load_doctor_link_token(db, token)
+            if not link:
+                return "/"
+            return link.next_path or "/"
+        finally:
+            db.close()
+    link = _load_doctor_link_token(db, token)
+    if not link:
+        return "/"
+    return link.next_path or "/"
+
+
+def token_payload(token: str | None, db: Session) -> dict[str, object]:
+    link = _load_doctor_link_token(db, token)
+    if not link or not link.payload_json:
+        return {}
+    try:
+        payload = json.loads(link.payload_json)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
