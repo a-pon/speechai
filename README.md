@@ -38,6 +38,22 @@ MVP для анализа стоматологических консульта�
 - `GET /api/integration/1c-link` - открыть страницу админа с автозаполнением
 - `GET /api/integration/link-doctor` - открыть страницу врача, залогинить и передать данные
 
+### Параметры ссылки `link-doctor`
+
+- Дата консультации - `consultation_date`
+- Подразделение клиники - `clinic_division`
+- Код врача - `doctor_code`
+- ФИО врача - `doctor_full_name`
+- Должность врача - `doctor_position`
+- Категория врача - `doctor_category`
+- Код пациента - `patient_code`
+- ФИО пациента - `patient_full_name`
+- Дата рождения пациента - `patient_birth_date`
+- Возраст пациента - `patient_age`
+- Пол пациента - `patient_gender`
+- Телефоны пациента - `patient_phones`
+- Почты пациента - `patient_emails`
+
 ## Формат данных
 
 - Код врача и пациента - до 9 символов
