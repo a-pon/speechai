@@ -48,6 +48,7 @@ def _parse_ddmmyyyy(value: str | None) -> str | None:
 
 def _consultation_query_params(
     consultation_date: str | None = None,
+    clinic_division: str | None = None,
     doctor_code: str | None = None,
     doctor_full_name: str | None = None,
     doctor_position: str | None = None,
@@ -64,6 +65,7 @@ def _consultation_query_params(
         key: value
         for key, value in {
             "consultation_date": consultation_date,
+            "clinic_division": clinic_division,
             "doctor_code": doctor_code,
             "doctor_full_name": doctor_full_name,
             "doctor_position": doctor_position,
@@ -83,6 +85,7 @@ def _consultation_query_params(
 @router.get("/1c-link")
 def open_1c_link(
     consultation_date: str | None = None,
+    clinic_division: str | None = None,
     doctor_code: str | None = None,
     doctor_full_name: str | None = None,
     doctor_position: str | None = None,
@@ -99,6 +102,7 @@ def open_1c_link(
         key: value
         for key, value in {
             "consultation_date": consultation_date,
+            "clinic_division": clinic_division,
             "doctor_code": doctor_code,
             "doctor_full_name": doctor_full_name,
             "doctor_position": doctor_position,
@@ -122,6 +126,7 @@ def link_doctor(
     token: str | None = None,
     next: str = "/",
     consultation_date: str | None = None,
+    clinic_division: str | None = None,
     doctor_code: str | None = None,
     doctor_full_name: str | None = None,
     doctor_position: str | None = None,
@@ -137,6 +142,7 @@ def link_doctor(
 ):
     params = _consultation_query_params(
         consultation_date=consultation_date,
+        clinic_division=clinic_division,
         doctor_code=doctor_code,
         doctor_full_name=doctor_full_name,
         doctor_position=doctor_position,
@@ -178,6 +184,7 @@ def link_doctor(
 @router.get("/1c", response_model=OneCConsultationOut)
 def read_1c_payload(
     consultation_date: str | None = None,
+    clinic_division: str | None = None,
     doctor_code: str | None = None,
     doctor_full_name: str | None = None,
     doctor_position: str | None = None,
@@ -198,6 +205,7 @@ def read_1c_payload(
 
     return OneCConsultationOut(
         consultation_date=_parse_ddmmyyyy(_repair_text(consultation_date)),
+        clinic_division=_repair_text(clinic_division),
         doctor=OneCDoctorIn(
             code=_repair_text(doctor_code),
             full_name=_repair_text(doctor_full_name),
@@ -225,6 +233,7 @@ def normalize_1c_payload(payload: OneCConsultationIn, user=Depends(get_current_u
 
     return OneCConsultationOut(
         consultation_date=_parse_ddmmyyyy(_repair_text(payload.consultation_date)),
+        clinic_division=_repair_text(payload.clinic_division),
         doctor=OneCDoctorIn(
             code=_repair_text(payload.doctor.code),
             full_name=_repair_text(payload.doctor.full_name),

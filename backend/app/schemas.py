@@ -91,11 +91,13 @@ class OneCPatientIn(BaseModel):
 
 class OneCConsultationIn(BaseModel):
     consultation_date: str | None = None
+    clinic_division: str | None = None
     doctor: OneCDoctorIn
     patient: OneCPatientIn
 
 
 class OneCConsultationOut(BaseModel):
     consultation_date: str | None
+    clinic_division: str | None = None
     doctor: OneCDoctorIn
     patient: OneCPatientIn

@@ -370,6 +370,7 @@ function setupTabs() {
 function syncHiddenUploadFieldsFromQuery() {
   const params = new URLSearchParams(window.location.search);
   const queryMap = {
+    clinic_division: "clinic_division",
     doctor_code: "doctor_code",
     doctor_full_name: "doctor_full_name",
     doctor_position: "doctor_position",
@@ -398,6 +399,7 @@ function syncHiddenUploadFieldsFromQuery() {
   if (sourcePayloadInput) {
     const payload = {
       consultation_date: params.get("consultation_date") || null,
+      clinic_division: params.get("clinic_division") || null,
       doctor: {
         code: params.get("doctor_code") || null,
         full_name: params.get("doctor_full_name") || null,
@@ -427,6 +429,7 @@ function syncOnecFormFromQuery() {
   const params = new URLSearchParams(window.location.search);
   const queryMap = {
     consultation_date: "consultation_date",
+    clinic_division: "clinic_division",
     doctor_code: "doctor_code",
     doctor_full_name: "doctor_full_name",
     doctor_position: "doctor_position",
@@ -492,6 +495,7 @@ function applyOnecToUploadForm() {
   const hiddenMap = {
     source_payload_json: JSON.stringify({
       consultation_date: String(fd.get("consultation_date") || "").trim() || null,
+      clinic_division: String(fd.get("clinic_division") || "").trim() || null,
       doctor: {
         code: String(fd.get("doctor_code") || "").trim() || null,
         full_name: String(fd.get("doctor_full_name") || "").trim() || null,
