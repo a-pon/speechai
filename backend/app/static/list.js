@@ -72,31 +72,6 @@ function splitList(value) {
     .filter(Boolean);
 }
 
-async function copyText(text) {
-  const value = String(text || "");
-  if (!value) throw new Error("Пустая ссылка");
-
-  if (window.isSecureContext && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
-
-  const fallbackInput = document.createElement("textarea");
-  fallbackInput.value = value;
-  fallbackInput.setAttribute("readonly", "true");
-  fallbackInput.style.position = "fixed";
-  fallbackInput.style.top = "-9999px";
-  fallbackInput.style.left = "-9999px";
-  document.body.appendChild(fallbackInput);
-  fallbackInput.focus();
-  fallbackInput.select();
-  const copied = document.execCommand("copy");
-  document.body.removeChild(fallbackInput);
-  if (!copied) {
-    throw new Error("Не удалось скопировать ссылку");
-  }
-}
-
 function formatErrorMessage(err, fallback) {
   if (!err) return fallback;
   if (typeof err === "string") return err;
@@ -108,6 +83,15 @@ function formatErrorMessage(err, fallback) {
     return JSON.stringify(err);
   }
   return fallback;
+}
+
+function extractLoginToken(link) {
+  if (!link) return "";
+  try {
+    return new URL(link, window.location.origin).searchParams.get("token") || "";
+  } catch {
+    return "";
+  }
 }
 
 async function readApiResponseData(res) {
@@ -579,6 +563,7 @@ async function loadUsers() {
   usersTableBody.innerHTML = "";
   users.forEach((user) => {
     const tr = document.createElement("tr");
+    const loginToken = extractLoginToken(user.login_link);
     tr.innerHTML = `
       <td><input type="text" class="u-username" value="${escapeHtml(user.username)}" readonly></td>
       <td>
@@ -589,32 +574,12 @@ async function loadUsers() {
       </td>
       <td><input type="text" class="u-doctor-name" value="${escapeHtml(user.doctor_name || "")}"></td>
       <td><input type="text" class="u-password" maxlength="8" minlength="8" placeholder="новый пароль"></td>
-      <td>
-        <div class="link-cell">
-          <input type="text" class="u-link" value="${escapeHtml(user.login_link || "")}" readonly>
-          <button type="button" class="btn-link">Копировать</button>
-        </div>
-      </td>
+      <td><input type="text" class="u-token" value="${escapeHtml(loginToken)}" readonly></td>
       <td class="row-actions">
         <button type="button" class="btn-save">Сохранить</button>
         ${user.username === "admin" ? "" : '<button type="button" class="btn-delete">Удалить</button>'}
       </td>
     `;
-    tr.querySelector(".btn-link").addEventListener("click", async () => {
-      const link = tr.querySelector(".u-link").value;
-      try {
-        await copyText(link);
-        userCreateStatus.textContent = "Ссылка скопирована";
-      } catch (err) {
-        userCreateStatus.textContent = "Ошибка: " + formatErrorMessage(err, "Не удалось скопировать ссылку");
-      } finally {
-        setTimeout(() => {
-          if (userCreateStatus.textContent === "Ссылка скопирована") {
-            userCreateStatus.textContent = "";
-          }
-        }, 1200);
-      }
-    });
     tr.querySelector(".btn-save").addEventListener("click", async () => {
       try {
         const payload = {
