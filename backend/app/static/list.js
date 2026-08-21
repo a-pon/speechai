@@ -22,6 +22,10 @@ const listBody = document.querySelector("#list-table tbody");
 const doctorNameInput = uploadForm.querySelector('[name="doctor_name"]');
 const doctorNameLabel = document.getElementById("doctor-name-label");
 const consultationDateInput = uploadForm.querySelector('[name="consultation_date"]');
+const consultationTypeInput = uploadForm.querySelector('[name="consultation_type"]');
+const consultationTypeVisibleInput = uploadForm.querySelector('[name="consultation_type_visible"]');
+const clinicDivisionInput = uploadForm.querySelector('[name="clinic_division"]');
+const clinicDivisionVisibleInput = uploadForm.querySelector('[name="clinic_division_visible"]');
 
 let pollTimer = null;
 let currentUser = null;
@@ -43,6 +47,11 @@ function formatIsoDate(value) {
   const trimmed = String(value).trim();
   if (!trimmed) return "";
   return trimmed;
+}
+
+function consultationTypeLabel(value) {
+  if (value === "repeat_adult") return "Повторная";
+  return "Первичная";
 }
 
 function formatDmyDate(value) {
@@ -112,11 +121,26 @@ function buildUploadFormData() {
     throw new Error("Выберите аудиофайл");
   }
   fd.append("file", file, file.name || "consultation.mp3");
+  consultationTypeInput.value = consultationTypeVisibleInput.value || consultationTypeInput.value || "primary_adult";
+  clinicDivisionInput.value = clinicDivisionVisibleInput.value || clinicDivisionInput.value || "";
+  const sourcePayloadInput = uploadForm.querySelector('[name="source_payload_json"]');
+  if (sourcePayloadInput?.value) {
+    try {
+      const payload = JSON.parse(sourcePayloadInput.value);
+      payload.consultation_type = consultationTypeInput.value;
+      payload.clinic_division = clinicDivisionInput.value;
+      sourcePayloadInput.value = JSON.stringify(payload);
+    } catch {
+      sourcePayloadInput.value = "";
+    }
+  }
 
   const fields = [
     "doctor_name",
     "patient_name",
     "consultation_date",
+    "consultation_type",
+    "clinic_division",
     "source_system",
     "source_payload_json",
     "doctor_code",
@@ -354,6 +378,7 @@ function setupTabs() {
 function syncHiddenUploadFieldsFromQuery() {
   const params = new URLSearchParams(window.location.search);
   const queryMap = {
+    consultation_type: "consultation_type",
     clinic_division: "clinic_division",
     doctor_code: "doctor_code",
     doctor_full_name: "doctor_full_name",
@@ -383,6 +408,7 @@ function syncHiddenUploadFieldsFromQuery() {
   if (sourcePayloadInput) {
     const payload = {
       consultation_date: params.get("consultation_date") || null,
+      consultation_type: params.get("consultation_type") || null,
       clinic_division: params.get("clinic_division") || null,
       doctor: {
         code: params.get("doctor_code") || null,
@@ -406,6 +432,16 @@ function syncHiddenUploadFieldsFromQuery() {
   if (consultationFromQuery) {
     consultationDateInput.value = formatDmyDate(consultationFromQuery);
   }
+  const consultationTypeFromQuery = params.get("consultation_type");
+  if (consultationTypeFromQuery) {
+    consultationTypeInput.value = consultationTypeFromQuery;
+    if (consultationTypeVisibleInput) consultationTypeVisibleInput.value = consultationTypeFromQuery;
+  }
+  const clinicDivisionFromQuery = params.get("clinic_division");
+  if (clinicDivisionFromQuery) {
+    clinicDivisionInput.value = clinicDivisionFromQuery;
+    if (clinicDivisionVisibleInput) clinicDivisionVisibleInput.value = clinicDivisionFromQuery;
+  }
 }
 
 function syncOnecFormFromQuery() {
@@ -413,6 +449,7 @@ function syncOnecFormFromQuery() {
   const params = new URLSearchParams(window.location.search);
   const queryMap = {
     consultation_date: "consultation_date",
+    consultation_type: "consultation_type",
     clinic_division: "clinic_division",
     doctor_code: "doctor_code",
     doctor_full_name: "doctor_full_name",
@@ -451,6 +488,10 @@ function applyQueryToUploadForm() {
     uploadForm.querySelector('[name="patient_name"]').value = patientFullName;
   }
   consultationDateInput.value = todayIsoLocal();
+  consultationTypeInput.value = params.get("consultation_type") || consultationTypeVisibleInput.value || "primary_adult";
+  consultationTypeVisibleInput.value = consultationTypeInput.value;
+  clinicDivisionInput.value = params.get("clinic_division") || clinicDivisionVisibleInput.value || "";
+  clinicDivisionVisibleInput.value = clinicDivisionInput.value;
   if (currentUser?.role === "admin" && params.get("consultation_date")) {
     consultationDateInput.value = formatDmyDate(params.get("consultation_date"));
   }
@@ -479,6 +520,7 @@ function applyOnecToUploadForm() {
   const hiddenMap = {
     source_payload_json: JSON.stringify({
       consultation_date: String(fd.get("consultation_date") || "").trim() || null,
+      consultation_type: String(fd.get("consultation_type") || "").trim() || null,
       clinic_division: String(fd.get("clinic_division") || "").trim() || null,
       doctor: {
         code: String(fd.get("doctor_code") || "").trim() || null,
@@ -496,6 +538,8 @@ function applyOnecToUploadForm() {
         emails: splitList(fd.get("patient_emails")),
       },
     }),
+    consultation_type: String(fd.get("consultation_type") || "").trim() || "primary_adult",
+    clinic_division: String(fd.get("clinic_division") || "").trim() || "",
     doctor_code: String(fd.get("doctor_code") || "").trim() || "",
     doctor_position: String(fd.get("doctor_position") || "").trim() || "",
     doctor_category: String(fd.get("doctor_category") || "").trim() || "",
@@ -512,6 +556,8 @@ function applyOnecToUploadForm() {
   });
   const normalizedConsultationDate = formatDmyDate(String(fd.get("consultation_date") || "").trim());
   consultationDateInput.value = normalizedConsultationDate || formatDmyDate(todayIsoLocal());
+  consultationTypeVisibleInput.value = consultationTypeInput.value || "primary_adult";
+  clinicDivisionVisibleInput.value = clinicDivisionInput.value || "";
 }
 
 async function fetchConsultations() {
@@ -523,6 +569,8 @@ async function fetchConsultations() {
     const canDelete = currentUser && (canViewAllRecords(currentUser) || currentUser.doctor_name === item.doctor_name);
     tr.innerHTML = `
       <td>${item.consultation_date}</td>
+      <td>${consultationTypeLabel(item.consultation_type)}</td>
+      <td>${escapeHtml(item.clinic_division || "—")}</td>
       <td>${escapeHtml(item.patient_name)}</td>
       <td>${escapeHtml(item.doctor_name)}</td>
       <td>${formatDuration(item.duration_sec)}</td>

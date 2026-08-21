@@ -17,6 +17,7 @@ from app.schemas import ConsultationDetail, ConsultationListItem, TranscriptSegm
 from app.services.pipeline import process_consultation
 
 router = APIRouter(prefix="/api/consultations", tags=["consultations"])
+CONSULTATION_TYPES = {"primary_adult", "repeat_adult"}
 
 try:
     from imageio_ffmpeg import get_ffmpeg_exe
@@ -93,6 +94,22 @@ def _parse_optional_int(value: str | None) -> int | None:
         raise HTTPException(400, "Числовое поле заполнено некорректно") from exc
 
 
+def _required_text(value: str | None, field_name: str) -> str:
+    normalized = (value or "").strip()
+    if not normalized:
+        raise HTTPException(400, f"{field_name} обязательно")
+    return normalized
+
+
+def _normalize_consultation_type(value: str | None) -> str:
+    normalized = (value or "").strip()
+    if not normalized:
+        raise HTTPException(400, "Вид консультации обязателен")
+    if normalized not in CONSULTATION_TYPES:
+        raise HTTPException(400, "Вид консультации должен быть primary_adult или repeat_adult")
+    return normalized
+
+
 def _remove_consultation_files(consultation_id: str, audio_path: Path, settings_audio_dir: Path) -> None:
     id_dir = settings_audio_dir / consultation_id
     if id_dir.is_dir():
@@ -113,6 +130,8 @@ async def upload_consultation(
     doctor_name: str = Form(""),
     patient_name: str = Form(...),
     consultation_date: str = Form(...),
+    consultation_type: str = Form(...),
+    clinic_division: str = Form(...),
     source_system: str | None = Form(None),
     source_payload_json: str | None = Form(None),
     doctor_code: str | None = Form(None),
@@ -147,12 +166,15 @@ async def upload_consultation(
     parsed_consultation_date = _parse_ddmmyyyy_to_date(consultation_date)
     if not parsed_consultation_date:
         raise HTTPException(400, "Дата консультации обязательна")
+    normalized_consultation_type = _normalize_consultation_type(consultation_type)
+    normalized_clinic_division = _required_text(clinic_division, "Подразделение")
 
     normalized_doctor_name = doctor_name.strip()
     if user["role"] == "doctor":
         normalized_doctor_name = user["doctor_name"] or user["username"]
     elif not normalized_doctor_name:
         raise HTTPException(400, "Имя врача обязательно")
+    normalized_patient_name = _required_text(patient_name, "Имя пациента")
 
     consultation = Consultation(
         id=consultation_id,
@@ -168,8 +190,10 @@ async def upload_consultation(
         patient_phones_json=patient_phones_json,
         patient_emails_json=patient_emails_json,
         consultation_date=parsed_consultation_date,
+        consultation_type=normalized_consultation_type,
+        clinic_division=normalized_clinic_division,
         doctor_name=normalized_doctor_name,
-        patient_name=patient_name.strip(),
+        patient_name=normalized_patient_name,
         audio_path=str(audio_path),
         original_filename=file.filename,
         status="uploaded",
@@ -197,6 +221,8 @@ def list_consultations(db: Session = Depends(get_db), user=Depends(get_current_u
         ConsultationListItem(
             id=r.id,
             consultation_date=r.consultation_date,
+            consultation_type=r.consultation_type,
+            clinic_division=r.clinic_division,
             doctor_name=r.doctor_name,
             patient_name=r.patient_name,
             duration_sec=r.duration_sec,
@@ -252,6 +278,8 @@ def get_consultation(
     return ConsultationDetail(
         id=row.id,
         consultation_date=row.consultation_date,
+        consultation_type=row.consultation_type,
+        clinic_division=row.clinic_division,
         doctor_name=row.doctor_name,
         patient_name=row.patient_name,
         duration_sec=row.duration_sec,

@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import get_settings
@@ -22,11 +23,35 @@ engine = _make_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _migrate_sqlite() -> None:
+    if not get_settings().database_url.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    if "consultations" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("consultations")}
+    statements = []
+    if "consultation_type" not in columns:
+        statements.append("ALTER TABLE consultations ADD COLUMN consultation_type VARCHAR(32) NOT NULL DEFAULT 'primary_adult'")
+    if "clinic_division" not in columns:
+        statements.append("ALTER TABLE consultations ADD COLUMN clinic_division VARCHAR(255) NOT NULL DEFAULT ''")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
 def init_db() -> None:
     from app import models  # noqa: F401
     from app.auth import create_default_users
 
     Base.metadata.create_all(bind=engine)
+    _migrate_sqlite()
     db = SessionLocal()
     try:
         create_default_users(db)

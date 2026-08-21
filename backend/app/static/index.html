@@ -42,12 +42,19 @@
       <h2>Данные из 1С</h2>
       <p class="hint">Блок для врача: данные подставляются из ссылки, но их можно редактировать перед загрузкой.</p>
       <form id="onec-form">
-        <label>Дата консультации
-          <input type="text" name="consultation_date" placeholder="дд/мм/гггг">
+        <label>Дата консультации *
+          <input type="text" name="consultation_date" placeholder="дд/мм/гггг" required>
         </label>
 
-        <label>Подразделение клиники
-          <input type="text" name="clinic_division" maxlength="70">
+        <label>Вид консультации *
+          <select name="consultation_type" required>
+            <option value="primary_adult">Первичная взрослая консультация</option>
+            <option value="repeat_adult">Повторная взрослая консультация</option>
+          </select>
+        </label>
+
+        <label>Подразделение клиники *
+          <input type="text" name="clinic_division" maxlength="70" required>
         </label>
 
         <fieldset class="fieldset-block">
@@ -55,8 +62,8 @@
           <label>Код
             <input type="text" name="doctor_code" maxlength="9">
           </label>
-          <label>ФИО
-            <input type="text" name="doctor_full_name" maxlength="70">
+          <label>ФИО *
+            <input type="text" name="doctor_full_name" maxlength="70" required>
           </label>
           <label>Должность
             <input type="text" name="doctor_position" maxlength="70">
@@ -71,8 +78,8 @@
           <label>Код
             <input type="text" name="patient_code" maxlength="9">
           </label>
-          <label>ФИО
-            <input type="text" name="patient_full_name" maxlength="70">
+          <label>ФИО *
+            <input type="text" name="patient_full_name" maxlength="70" required>
           </label>
           <label>Дата рождения
             <input type="text" name="patient_birth_date" placeholder="дд/мм/гггг">
@@ -114,11 +121,13 @@
         <label>Аудио (MP3)
           <input type="file" name="file" accept=".mp3,.wav,.ogg,.opus,.m4a,.webm" required>
         </label>
-        <label id="doctor-name-label">Врач
+        <label id="doctor-name-label">Врач *
           <input type="text" name="doctor_name" required placeholder="Иванов И.И.">
         </label>
         <input type="hidden" name="source_system" value="1c">
         <input type="hidden" name="source_payload_json">
+        <input type="hidden" name="consultation_type">
+        <input type="hidden" name="clinic_division">
         <input type="hidden" name="doctor_code">
         <input type="hidden" name="doctor_position">
         <input type="hidden" name="doctor_category">
@@ -128,11 +137,20 @@
         <input type="hidden" name="patient_gender">
         <input type="hidden" name="patient_phones_json">
         <input type="hidden" name="patient_emails_json">
-        <label>Пациент
+        <label>Пациент *
           <input type="text" name="patient_name" required placeholder="Петрова А.">
         </label>
-        <label>Дата консультации
+        <label>Дата консультации *
           <input type="date" name="consultation_date" required>
+        </label>
+        <label>Вид консультации *
+          <select name="consultation_type_visible" required>
+            <option value="primary_adult">Первичная взрослая консультация</option>
+            <option value="repeat_adult">Повторная взрослая консультация</option>
+          </select>
+        </label>
+        <label>Подразделение клиники *
+          <input type="text" name="clinic_division_visible" required maxlength="70">
         </label>
         <button type="submit">Загрузить и обработать</button>
       </form>
@@ -183,6 +201,8 @@
         <thead>
           <tr>
             <th>Дата</th>
+            <th>Вид</th>
+            <th>Подразделение</th>
             <th>Пациент</th>
             <th>Врач</th>
             <th>Длительность</th>

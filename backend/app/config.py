@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     yandexgpt_model: str = "yandexgpt"
     database_url: str = f"sqlite:///{ROOT_DIR / 'data' / 'speechai.db'}"
     audio_dir: Path = ROOT_DIR / "data" / "audio"
-    evaluation_prompt_path: Path = ROOT_DIR / "config" / "evaluation_prompt.txt"
+    evaluation_prompt_primary_path: Path = ROOT_DIR / "config" / "evaluation_prompt_primary_adult.txt"
+    evaluation_prompt_repeat_path: Path = ROOT_DIR / "config" / "evaluation_prompt_repeat_adult.txt"
     session_secret: str = "speechai-mvp-secret"
 
 

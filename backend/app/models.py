@@ -26,6 +26,8 @@ class Consultation(Base):
     patient_emails_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     consultation_date: Mapped[date] = mapped_column(Date)
+    consultation_type: Mapped[str] = mapped_column(String(32), default="primary_adult")
+    clinic_division: Mapped[str] = mapped_column(String(255), default="")
     doctor_name: Mapped[str] = mapped_column(String(255))
     patient_name: Mapped[str] = mapped_column(String(255))
     audio_path: Mapped[str] = mapped_column(String(512))

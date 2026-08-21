@@ -32,7 +32,7 @@ async def process_consultation(db: Session, consultation_id: str) -> None:
         consultation.segments = segments
         consultation.transcript_text = transcript_text
 
-        report, overall_score = await evaluate_transcript(transcript_text)
+        report, overall_score = await evaluate_transcript(transcript_text, consultation.consultation_type)
         consultation.evaluation_report = report
         consultation.overall_score = overall_score
         consultation.status = "ready"

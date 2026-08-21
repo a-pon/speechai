@@ -12,6 +12,11 @@ function canViewAllRecords(user) {
   return user?.role === "admin" || user?.can_view_all_records === true;
 }
 
+function consultationTypeLabel(value) {
+  if (value === "repeat_adult") return "Повторная взрослая";
+  return "Первичная взрослая";
+}
+
 async function loadDetail() {
   const res = await apiFetch(`/api/consultations/${consultationId}`);
   if (!res.ok) {
@@ -32,6 +37,8 @@ async function loadDetail() {
       <div><strong>Пациент:</strong> ${escapeHtml(data.patient_name)}</div>
       <div><strong>Врач:</strong> ${escapeHtml(data.doctor_name)}</div>
       <div><strong>Дата:</strong> ${data.consultation_date}</div>
+      <div><strong>Вид консультации:</strong> ${consultationTypeLabel(data.consultation_type)}</div>
+      <div><strong>Подразделение:</strong> ${escapeHtml(data.clinic_division || "—")}</div>
       <div><strong>Оценка:</strong> ${data.overall_score != null ? data.overall_score.toFixed(1) + " / 5" : "—"}</div>
       <div class="status-row">
         <span><strong>Статус:</strong> <span class="status-badge ${data.status}">${statusLabel(data.status)}</span></span>

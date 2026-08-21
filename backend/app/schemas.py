@@ -16,6 +16,8 @@ class TranscriptSegmentOut(BaseModel):
 class ConsultationListItem(BaseModel):
     id: str
     consultation_date: date
+    consultation_type: str
+    clinic_division: str
     doctor_name: str
     patient_name: str
     duration_sec: int | None
@@ -27,6 +29,8 @@ class ConsultationListItem(BaseModel):
 class ConsultationDetail(BaseModel):
     id: str
     consultation_date: date
+    consultation_type: str
+    clinic_division: str
     doctor_name: str
     patient_name: str
     duration_sec: int | None
@@ -91,6 +95,7 @@ class OneCPatientIn(BaseModel):
 
 class OneCConsultationIn(BaseModel):
     consultation_date: str | None = None
+    consultation_type: str | None = None
     clinic_division: str | None = None
     doctor: OneCDoctorIn
     patient: OneCPatientIn
@@ -98,6 +103,7 @@ class OneCConsultationIn(BaseModel):
 
 class OneCConsultationOut(BaseModel):
     consultation_date: str | None
+    consultation_type: str | None = None
     clinic_division: str | None = None
     doctor: OneCDoctorIn
     patient: OneCPatientIn
