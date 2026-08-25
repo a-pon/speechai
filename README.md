@@ -93,6 +93,23 @@ mkdir -p volumes/data
 docker compose up -d
 ```
 
+Контейнер публикует FastAPI только на `127.0.0.1:8000`; внешний HTTPS должен принимать nginx.
+
+## HTTPS через nginx
+
+Готовый пример конфига: `deploy/nginx/speechai.conf`.
+
+На сервере:
+
+```bash
+sudo cp deploy/nginx/speechai.conf /etc/nginx/sites-available/speechai
+sudo ln -s /etc/nginx/sites-available/speechai /etc/nginx/sites-enabled/speechai
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Если сертификат лежит не в `/etc/letsencrypt/live/tr.atribeautemed.ru/`, поправьте пути `ssl_certificate` и `ssl_certificate_key` в nginx-конфиге.
+
 ## Обновление на сервере
 
 ```bash

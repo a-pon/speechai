@@ -4,7 +4,7 @@ services:
     image: speechai:local
     container_name: speechai
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       MOCK_AI: "${MOCK_AI:-true}"
       YANDEX_API_KEY: "${YANDEX_API_KEY:-}"
