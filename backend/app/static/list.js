@@ -181,7 +181,6 @@ function updateRecordTimer() {
 
 function setRecordUi(state) {
   if (!recordingPanel) return;
-  recordingPanel.hidden = currentUser?.role !== "doctor";
   if (state === "idle") {
     recordStatus.textContent = "Микрофон не используется.";
     recordTimer.hidden = true;
