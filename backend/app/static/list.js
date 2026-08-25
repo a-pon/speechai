@@ -113,14 +113,16 @@ async function readApiResponseData(res) {
   return detail ? { detail: detail.slice(0, 500) } : {};
 }
 
-function buildUploadFormData() {
+function buildUploadFormData({ requireFile = true } = {}) {
   const fd = new FormData();
   const fileInput = uploadForm.querySelector('[name="file"]');
   const file = fileInput?.files?.[0];
-  if (!file) {
+  if (requireFile && !file) {
     throw new Error("Выберите аудиофайл");
   }
-  fd.append("file", file, file.name || "consultation.mp3");
+  if (file) {
+    fd.append("file", file, file.name || "consultation.mp3");
+  }
   consultationTypeInput.value = consultationTypeVisibleInput.value || consultationTypeInput.value || "primary_adult";
   clinicDivisionInput.value = clinicDivisionVisibleInput.value || clinicDivisionInput.value || "";
   const sourcePayloadInput = uploadForm.querySelector('[name="source_payload_json"]');
@@ -278,9 +280,9 @@ function getPreferredMimeType() {
 
 async function sendRecordedAudio(blob, ext) {
   setRecordUi("busy");
-  const fd = buildUploadFormData();
-  fd.set("file", new File([blob], `consultation.${ext}`, { type: blob.type || "application/octet-stream" }));
   try {
+    const fd = buildUploadFormData({ requireFile: false });
+    fd.set("file", new File([blob], `consultation.${ext}`, { type: blob.type || "application/octet-stream" }));
     const res = await apiFetch("/api/consultations/upload", { method: "POST", body: fd });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -319,7 +321,11 @@ async function startRecording() {
       }
     };
     recordRecorder.onstop = () => {
-      if (!recordChunks.length) return;
+      if (!recordChunks.length) {
+        uploadStatus.textContent = "Ошибка: запись не содержит аудиоданных.";
+        cleanupRecording();
+        return;
+      }
       const blob = new Blob(recordChunks, { type: recordRecorder?.mimeType || "audio/webm" });
       const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
       void sendRecordedAudio(blob, ext);
