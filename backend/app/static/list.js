@@ -203,6 +203,13 @@ function setRecordUi(state) {
     recordPauseButton.hidden = false;
     recordPauseButton.textContent = "Продолжить";
     recordStopButton.hidden = false;
+  } else if (state === "requesting") {
+    recordStatus.textContent = "Запрашиваем доступ к микрофону...";
+    recordTimer.hidden = true;
+    recordTimer.textContent = "00:00";
+    recordStartButton.hidden = true;
+    recordPauseButton.hidden = true;
+    recordStopButton.hidden = true;
   } else if (state === "busy") {
     recordStatus.textContent = "Отправляем запись...";
     recordTimer.hidden = false;
@@ -296,6 +303,7 @@ async function sendRecordedAudio(blob, ext) {
 
 async function startRecording() {
   uploadStatus.textContent = "";
+  setRecordUi("requesting");
   try {
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
       throw new Error("Браузер не поддерживает запись звука");
@@ -733,6 +741,12 @@ recordPauseButton?.addEventListener("click", () => {
 
 recordStopButton?.addEventListener("click", () => {
   stopRecording();
+});
+
+window.addEventListener("pageshow", () => {
+  if (!recordRecorder || recordRecorder.state === "inactive") {
+    cleanupRecording();
+  }
 });
 
 async function initWorkspace() {
