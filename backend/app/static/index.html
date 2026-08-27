@@ -106,7 +106,6 @@
 
     <section id="upload-section" class="dev-only" hidden>
       <h2>Новая запись</h2>
-      <p class="hint">Блок для разработки; в проде записи поступают с сервера автоматически.</p>
       <div id="recording-panel" class="recording-panel" hidden>
         <div class="inline-row">
           <button type="button" id="record-start-button">Начать запись</button>
@@ -117,15 +116,15 @@
         <p id="record-timer" class="record-timer" hidden>00:00</p>
         <p class="hint">После остановки запись отправится в обработку как обычная консультация.</p>
       </div>
-      <form id="upload-form">
+      <form id="upload-form" class="upload-panel">
         <label>Аудио (MP3)
           <input type="file" name="file" accept=".mp3,.wav,.ogg,.opus,.m4a,.webm" required>
         </label>
-        <label id="doctor-name-label">Врач *
-          <input type="text" name="doctor_name" required placeholder="Иванов И.И.">
-        </label>
+        <input type="hidden" name="doctor_name">
         <input type="hidden" name="source_system" value="1c">
         <input type="hidden" name="source_payload_json">
+        <input type="hidden" name="patient_name">
+        <input type="hidden" name="consultation_date">
         <input type="hidden" name="consultation_type">
         <input type="hidden" name="clinic_division">
         <input type="hidden" name="doctor_code">
@@ -137,21 +136,6 @@
         <input type="hidden" name="patient_gender">
         <input type="hidden" name="patient_phones_json">
         <input type="hidden" name="patient_emails_json">
-        <label>Пациент *
-          <input type="text" name="patient_name" required placeholder="Петрова А.">
-        </label>
-        <label>Дата консультации *
-          <input type="date" name="consultation_date" required>
-        </label>
-        <label>Вид консультации *
-          <select name="consultation_type_visible" required>
-            <option value="primary_adult">Первичная взрослая консультация</option>
-            <option value="repeat_adult">Повторная взрослая консультация</option>
-          </select>
-        </label>
-        <label>Подразделение клиники *
-          <input type="text" name="clinic_division_visible" required maxlength="70">
-        </label>
         <button type="submit">Загрузить и обработать</button>
       </form>
       <p id="upload-status" class="status"></p>

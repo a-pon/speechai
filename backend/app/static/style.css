@@ -28,15 +28,29 @@ h2 { font-size: 1.1rem; margin-top: 0; }
 .back-link:hover { text-decoration: underline; }
 .hint { color: #666; font-size: 0.85rem; margin-top: 0.5rem; }
 .dev-only { padding-bottom: 1rem; margin-bottom: 1rem; border-bottom: 1px dashed #ddd; }
-.recording-panel {
+.recording-panel,
+.upload-panel {
   margin: 0.75rem 0 1rem;
   padding: 0.75rem;
   border: 1px solid #d7d7d7;
   border-radius: 8px;
   background: #fafafa;
 }
+.upload-panel {
+  max-width: 100%;
+}
 .recording-panel .inline-row {
   margin: 0 0 0.5rem;
+}
+.upload-panel input[type="file"] {
+  width: auto;
+  max-width: 100%;
+}
+.upload-panel button[type="submit"] {
+  color: #222;
+  background: #eee;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
 }
 .record-timer {
   margin: 0.25rem 0 0;

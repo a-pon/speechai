@@ -20,12 +20,9 @@ const userCreateForm = document.getElementById("user-create-form");
 const userCreateStatus = document.getElementById("user-create-status");
 const listBody = document.querySelector("#list-table tbody");
 const doctorNameInput = uploadForm.querySelector('[name="doctor_name"]');
-const doctorNameLabel = document.getElementById("doctor-name-label");
 const consultationDateInput = uploadForm.querySelector('[name="consultation_date"]');
 const consultationTypeInput = uploadForm.querySelector('[name="consultation_type"]');
-const consultationTypeVisibleInput = uploadForm.querySelector('[name="consultation_type_visible"]');
 const clinicDivisionInput = uploadForm.querySelector('[name="clinic_division"]');
-const clinicDivisionVisibleInput = uploadForm.querySelector('[name="clinic_division_visible"]');
 
 let pollTimer = null;
 let currentUser = null;
@@ -114,6 +111,7 @@ async function readApiResponseData(res) {
 }
 
 function buildUploadFormData({ requireFile = true } = {}) {
+  applyOnecToUploadForm();
   const fd = new FormData();
   const fileInput = uploadForm.querySelector('[name="file"]');
   const file = fileInput?.files?.[0];
@@ -123,8 +121,6 @@ function buildUploadFormData({ requireFile = true } = {}) {
   if (file) {
     fd.append("file", file, file.name || "consultation.mp3");
   }
-  consultationTypeInput.value = consultationTypeVisibleInput.value || consultationTypeInput.value || "primary_adult";
-  clinicDivisionInput.value = clinicDivisionVisibleInput.value || clinicDivisionInput.value || "";
   const sourcePayloadInput = uploadForm.querySelector('[name="source_payload_json"]');
   if (sourcePayloadInput?.value) {
     try {
@@ -162,6 +158,20 @@ function buildUploadFormData({ requireFile = true } = {}) {
     const value = String(input.value ?? "").trim();
     if (value) fd.append(name, value);
   });
+
+  const requiredFields = [
+    ["doctor_name", "ФИО врача"],
+    ["patient_name", "ФИО пациента"],
+    ["consultation_date", "дата консультации"],
+    ["consultation_type", "вид консультации"],
+    ["clinic_division", "подразделение клиники"],
+  ];
+  const missing = requiredFields
+    .filter(([name]) => !String(fd.get(name) || "").trim())
+    .map(([, label]) => label);
+  if (missing.length) {
+    throw new Error(`Заполните обязательные поля в блоке 1С: ${missing.join(", ")}`);
+  }
 
   return fd;
 }
@@ -448,12 +458,10 @@ function syncHiddenUploadFieldsFromQuery() {
   const consultationTypeFromQuery = params.get("consultation_type");
   if (consultationTypeFromQuery) {
     consultationTypeInput.value = consultationTypeFromQuery;
-    if (consultationTypeVisibleInput) consultationTypeVisibleInput.value = consultationTypeFromQuery;
   }
   const clinicDivisionFromQuery = params.get("clinic_division");
   if (clinicDivisionFromQuery) {
     clinicDivisionInput.value = clinicDivisionFromQuery;
-    if (clinicDivisionVisibleInput) clinicDivisionVisibleInput.value = clinicDivisionFromQuery;
   }
 }
 
@@ -501,10 +509,8 @@ function applyQueryToUploadForm() {
     uploadForm.querySelector('[name="patient_name"]').value = patientFullName;
   }
   consultationDateInput.value = todayIsoLocal();
-  consultationTypeInput.value = params.get("consultation_type") || consultationTypeVisibleInput.value || "primary_adult";
-  consultationTypeVisibleInput.value = consultationTypeInput.value;
-  clinicDivisionInput.value = params.get("clinic_division") || clinicDivisionVisibleInput.value || "";
-  clinicDivisionVisibleInput.value = clinicDivisionInput.value;
+  consultationTypeInput.value = params.get("consultation_type") || "primary_adult";
+  clinicDivisionInput.value = params.get("clinic_division") || "";
   if (currentUser?.role === "admin" && params.get("consultation_date")) {
     consultationDateInput.value = formatDmyDate(params.get("consultation_date"));
   }
@@ -513,53 +519,42 @@ function applyQueryToUploadForm() {
 function applyOnecToUploadForm() {
   if (!onecForm) return;
   const fd = new FormData(onecForm);
-  const mappings = {
-    doctor_code: "doctor_code",
-    doctor_full_name: "doctor_name",
-    doctor_position: "doctor_position",
-    doctor_category: "doctor_category",
-    patient_code: "patient_code",
-    patient_full_name: "patient_name",
-    patient_birth_date: "patient_birth_date",
-    patient_age: "patient_age",
-    patient_gender: "patient_gender",
-  };
-  Object.entries(mappings).forEach(([sourceName, targetName]) => {
-    const target = uploadForm.querySelector(`[name="${targetName}"]`);
-    if (!target) return;
-    const value = String(fd.get(sourceName) || "").trim();
-    if (value) target.value = value;
-  });
+  const fieldValue = (name) => String(fd.get(name) || "").trim();
+  const consultationDate = formatDmyDate(fieldValue("consultation_date")) || formatDmyDate(todayIsoLocal());
+  const doctorFullName = fieldValue("doctor_full_name") || currentUser?.doctor_name || currentUser?.username || "";
   const hiddenMap = {
     source_payload_json: JSON.stringify({
-      consultation_date: String(fd.get("consultation_date") || "").trim() || null,
-      consultation_type: String(fd.get("consultation_type") || "").trim() || null,
-      clinic_division: String(fd.get("clinic_division") || "").trim() || null,
+      consultation_date: fieldValue("consultation_date") || null,
+      consultation_type: fieldValue("consultation_type") || null,
+      clinic_division: fieldValue("clinic_division") || null,
       doctor: {
-        code: String(fd.get("doctor_code") || "").trim() || null,
-        full_name: String(fd.get("doctor_full_name") || "").trim() || null,
-        position: String(fd.get("doctor_position") || "").trim() || null,
-        category: String(fd.get("doctor_category") || "").trim() || null,
+        code: fieldValue("doctor_code") || null,
+        full_name: fieldValue("doctor_full_name") || null,
+        position: fieldValue("doctor_position") || null,
+        category: fieldValue("doctor_category") || null,
       },
       patient: {
-        code: String(fd.get("patient_code") || "").trim() || null,
-        full_name: String(fd.get("patient_full_name") || "").trim() || null,
-        birth_date: String(fd.get("patient_birth_date") || "").trim() || null,
-        age: String(fd.get("patient_age") || "").trim() || null,
-        gender: String(fd.get("patient_gender") || "").trim() || null,
+        code: fieldValue("patient_code") || null,
+        full_name: fieldValue("patient_full_name") || null,
+        birth_date: fieldValue("patient_birth_date") || null,
+        age: fieldValue("patient_age") || null,
+        gender: fieldValue("patient_gender") || null,
         phones: splitList(fd.get("patient_phones")),
         emails: splitList(fd.get("patient_emails")),
       },
     }),
-    consultation_type: String(fd.get("consultation_type") || "").trim() || "primary_adult",
-    clinic_division: String(fd.get("clinic_division") || "").trim() || "",
-    doctor_code: String(fd.get("doctor_code") || "").trim() || "",
-    doctor_position: String(fd.get("doctor_position") || "").trim() || "",
-    doctor_category: String(fd.get("doctor_category") || "").trim() || "",
-    patient_code: String(fd.get("patient_code") || "").trim() || "",
-    patient_birth_date: String(fd.get("patient_birth_date") || "").trim() || "",
-    patient_age: String(fd.get("patient_age") || "").trim() || "",
-    patient_gender: String(fd.get("patient_gender") || "").trim() || "",
+    doctor_name: doctorFullName,
+    patient_name: fieldValue("patient_full_name"),
+    consultation_date: consultationDate,
+    consultation_type: fieldValue("consultation_type") || "primary_adult",
+    clinic_division: fieldValue("clinic_division"),
+    doctor_code: fieldValue("doctor_code"),
+    doctor_position: fieldValue("doctor_position"),
+    doctor_category: fieldValue("doctor_category"),
+    patient_code: fieldValue("patient_code"),
+    patient_birth_date: fieldValue("patient_birth_date"),
+    patient_age: fieldValue("patient_age"),
+    patient_gender: fieldValue("patient_gender"),
     patient_phones_json: JSON.stringify(splitList(fd.get("patient_phones"))),
     patient_emails_json: JSON.stringify(splitList(fd.get("patient_emails"))),
   };
@@ -567,10 +562,6 @@ function applyOnecToUploadForm() {
     const input = uploadForm.querySelector(`[name="${name}"]`);
     if (input) input.value = value;
   });
-  const normalizedConsultationDate = formatDmyDate(String(fd.get("consultation_date") || "").trim());
-  consultationDateInput.value = normalizedConsultationDate || formatDmyDate(todayIsoLocal());
-  consultationTypeVisibleInput.value = consultationTypeInput.value || "primary_adult";
-  clinicDivisionVisibleInput.value = clinicDivisionInput.value || "";
 }
 
 async function fetchConsultations() {
@@ -767,18 +758,8 @@ async function initWorkspace() {
   applyQueryToUploadForm();
   syncHiddenUploadFieldsFromQuery();
   syncOnecFormFromQuery();
-  if (currentUser.role === "doctor") {
-    onecForm.addEventListener("input", applyOnecToUploadForm);
-    applyOnecToUploadForm();
-  }
-  if (currentUser.role === "doctor") {
-    doctorNameInput.readOnly = true;
-    doctorNameInput.setAttribute("aria-readonly", "true");
-    doctorNameLabel.querySelector("input").title = "Поле заполняется автоматически";
-  } else {
-    doctorNameInput.readOnly = false;
-    doctorNameInput.removeAttribute("aria-readonly");
-  }
+  onecForm.addEventListener("input", applyOnecToUploadForm);
+  applyOnecToUploadForm();
   const params = new URLSearchParams(window.location.search);
   const requestedView = params.get("view");
   const initialView =
