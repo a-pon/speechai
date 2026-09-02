@@ -47,6 +47,7 @@ function formatIsoDate(value) {
 }
 
 function consultationTypeLabel(value) {
+  if (value === "primary_child") return "Первичная детская";
   if (value === "repeat_adult") return "Повторная";
   return "Первичная";
 }

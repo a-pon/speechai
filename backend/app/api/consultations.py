@@ -17,7 +17,7 @@ from app.schemas import ConsultationDetail, ConsultationListItem, TranscriptSegm
 from app.services.pipeline import process_consultation
 
 router = APIRouter(prefix="/api/consultations", tags=["consultations"])
-CONSULTATION_TYPES = {"primary_adult", "repeat_adult"}
+CONSULTATION_TYPES = {"primary_adult", "primary_child", "repeat_adult"}
 
 try:
     from imageio_ffmpeg import get_ffmpeg_exe
@@ -106,7 +106,7 @@ def _normalize_consultation_type(value: str | None) -> str:
     if not normalized:
         raise HTTPException(400, "Вид консультации обязателен")
     if normalized not in CONSULTATION_TYPES:
-        raise HTTPException(400, "Вид консультации должен быть primary_adult или repeat_adult")
+        raise HTTPException(400, "Вид консультации должен быть primary_adult, primary_child или repeat_adult")
     return normalized
 
 

@@ -13,6 +13,7 @@ function canViewAllRecords(user) {
 }
 
 function consultationTypeLabel(value) {
+  if (value === "primary_child") return "Первичная детская";
   if (value === "repeat_adult") return "Повторная взрослая";
   return "Первичная взрослая";
 }

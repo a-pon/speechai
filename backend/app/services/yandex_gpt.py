@@ -9,11 +9,12 @@ from app.services.mock_ai import mock_evaluate
 
 def _load_prompt(consultation_type: str) -> str:
     settings = get_settings()
-    path = (
-        settings.evaluation_prompt_repeat_path
-        if consultation_type == "repeat_adult"
-        else settings.evaluation_prompt_primary_path
-    )
+    prompt_paths = {
+        "primary_adult": settings.evaluation_prompt_primary_path,
+        "primary_child": settings.evaluation_prompt_primary_child_path,
+        "repeat_adult": settings.evaluation_prompt_repeat_path,
+    }
+    path = prompt_paths.get(consultation_type, settings.evaluation_prompt_primary_path)
     return path.read_text(encoding="utf-8")
 
 
