@@ -32,7 +32,7 @@ DEFAULT_USERS: list[dict[str, str]] = [
     {"username": "Корнилова Анастасия", "password": "P5t7Jn8A", "role": "doctor", "doctor_name": "Корнилова Анастасия"},
 ]
 
-FULL_RECORD_ACCESS_USERS = {"Кухтарская Татьяна", "Глухарская"}
+FULL_RECORD_ACCESS_USERS = {"Кухтарская Татьяна", "Кудзиева Тамара"}
 
 
 def has_full_record_access(username: str, role: str, doctor_name: str | None = None) -> bool:
