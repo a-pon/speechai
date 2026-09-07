@@ -166,9 +166,15 @@ def link_doctor(
         if not username:
             raise HTTPException(status_code=400, detail="Требуется username или token")
         next_path = next or "/"
-        link = build_doctor_login_link(username, None, next_path=next_path, payload=params)
+        link = build_doctor_login_link(username, None, db=db)
         if not link:
             raise HTTPException(404, "Пользователь врача не найден")
+        redirect_params = {}
+        if next_path != "/":
+            redirect_params["next"] = next_path
+        redirect_params.update(params)
+        if redirect_params:
+            link = f"{link}&{urlencode(redirect_params, doseq=True)}"
         return RedirectResponse(url=link, status_code=307)
 
     user = login_doctor_by_token(token, db)

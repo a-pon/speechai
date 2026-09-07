@@ -46,11 +46,11 @@ def me(user=Depends(get_current_user)):
 
 
 @router.get("/doctor-link", response_model=DoctorLinkResponse)
-def doctor_link(request: Request, username: str, user=Depends(get_current_user)):
+def doctor_link(request: Request, username: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Только для администратора")
 
-    link = build_doctor_login_link(username, str(request.base_url).rstrip("/"))
+    link = build_doctor_login_link(username, str(request.base_url).rstrip("/"), db=db)
     if not link:
         raise HTTPException(status_code=404, detail="Пользователь врача не найден")
 

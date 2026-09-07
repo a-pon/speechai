@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, TypedDict
 
 from fastapi import Depends, HTTPException, Request, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -61,6 +62,9 @@ def create_default_users(db: Session) -> None:
             )
         )
     db.commit()
+    for entry in DEFAULT_USERS:
+        if entry["role"] == "doctor":
+            get_or_create_doctor_link_token(db, entry["username"])
 
 
 def seed_demo_password() -> str:
@@ -127,7 +131,7 @@ def _issue_doctor_link_token(
     next_path: str | None = None,
     payload: dict[str, object] | None = None,
 ) -> str:
-    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+    expires_at = datetime.utcnow() + timedelta(days=30)
     next_value = next_path or "/"
     payload_json = _build_doctor_link_payload(payload)
     for _ in range(10):
@@ -148,22 +152,92 @@ def _issue_doctor_link_token(
     raise RuntimeError("Не удалось сгенерировать токен входа врача")
 
 
+def _find_active_doctor_link_token(
+    db: Session,
+    username: str,
+    next_path: str | None = None,
+    payload: dict[str, object] | None = None,
+) -> DoctorLinkToken | None:
+    expires_at = datetime.utcnow()
+    next_value = next_path or "/"
+    payload_json = _build_doctor_link_payload(payload)
+    return db.scalar(
+        select(DoctorLinkToken)
+        .where(
+            DoctorLinkToken.username == username,
+            DoctorLinkToken.next_path == next_value,
+            DoctorLinkToken.payload_json == payload_json,
+            DoctorLinkToken.expires_at >= expires_at,
+        )
+        .order_by(DoctorLinkToken.created_at.asc())
+    )
+
+
+def get_or_create_doctor_link_token(
+    db: Session,
+    username: str,
+    next_path: str | None = None,
+    payload: dict[str, object] | None = None,
+) -> str:
+    existing = _find_active_doctor_link_token(db, username, next_path=next_path, payload=payload)
+    if existing:
+        return existing.token
+    return _issue_doctor_link_token(db, username, next_path=next_path, payload=payload)
+
+
 def build_doctor_login_link(
     username: str,
     base_url: str | None = None,
     next_path: str | None = None,
     payload: dict[str, object] | None = None,
+    db: Session | None = None,
 ) -> str | None:
-    db = SessionLocal()
-    try:
-        user = db.get(User, username.strip())
+    normalized_username = username.strip()
+    if db is not None:
+        user = db.get(User, normalized_username)
         if not user or user.role != "doctor":
             return None
-        token = _issue_doctor_link_token(db, username.strip(), next_path=next_path, payload=payload)
+        token = get_or_create_doctor_link_token(db, normalized_username, next_path=next_path, payload=payload)
+        path = f"/api/integration/link-doctor?token={token}"
+        return f"{base_url.rstrip('/')}{path}" if base_url else path
+
+    db = SessionLocal()
+    try:
+        user = db.get(User, normalized_username)
+        if not user or user.role != "doctor":
+            return None
+        token = get_or_create_doctor_link_token(db, normalized_username, next_path=next_path, payload=payload)
     finally:
         db.close()
     path = f"/api/integration/link-doctor?token={token}"
     return f"{base_url.rstrip('/')}{path}" if base_url else path
+
+
+def build_existing_doctor_login_link(
+    username: str,
+    base_url: str | None = None,
+    db: Session | None = None,
+) -> str | None:
+    normalized_username = username.strip()
+
+    def build_with_db(session: Session) -> str | None:
+        user = session.get(User, normalized_username)
+        if not user or user.role != "doctor":
+            return None
+        link = _find_active_doctor_link_token(session, normalized_username)
+        if not link:
+            return None
+        path = f"/api/integration/link-doctor?token={link.token}"
+        return f"{base_url.rstrip('/')}{path}" if base_url else path
+
+    if db is not None:
+        return build_with_db(db)
+
+    db = SessionLocal()
+    try:
+        return build_with_db(db)
+    finally:
+        db.close()
 
 
 def _load_doctor_link_token(db: Session, token: str | None) -> DoctorLinkToken | None:

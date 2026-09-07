@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.auth import build_doctor_login_link, build_password_hash, get_current_user
+from app.auth import build_doctor_login_link, build_existing_doctor_login_link, build_password_hash, get_current_user
 from app.db import get_db
 from app.models import User
 from app.schemas import UserCreateIn, UserOut, UserUpdateIn
@@ -9,10 +9,11 @@ from app.schemas import UserCreateIn, UserOut, UserUpdateIn
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-def _to_out(request: Request, user: User) -> UserOut:
+def _to_out(request: Request, user: User, db: Session, ensure_login_link: bool = False) -> UserOut:
     login_link = None
     if user.role == "doctor":
-        login_link = build_doctor_login_link(user.username, str(request.base_url).rstrip("/"))
+        link_builder = build_doctor_login_link if ensure_login_link else build_existing_doctor_login_link
+        login_link = link_builder(user.username, str(request.base_url).rstrip("/"), db=db)
     return UserOut(
         username=user.username,
         role=user.role,
@@ -30,7 +31,7 @@ def _require_admin(user=Depends(get_current_user)):
 @router.get("", response_model=list[UserOut])
 def list_users(request: Request, db: Session = Depends(get_db), _user=Depends(_require_admin)):
     users = db.query(User).order_by(User.role, User.username).all()
-    return [_to_out(request, user) for user in users]
+    return [_to_out(request, user, db) for user in users]
 
 
 @router.post("", response_model=UserOut)
@@ -52,7 +53,7 @@ def create_user(payload: UserCreateIn, request: Request, db: Session = Depends(g
     db.add(user)
     db.commit()
     db.refresh(user)
-    return _to_out(request, user)
+    return _to_out(request, user, db, ensure_login_link=True)
 
 
 @router.patch("/{username}", response_model=UserOut)
@@ -78,7 +79,7 @@ def update_user(
         user.doctor_name = user.username
     db.commit()
     db.refresh(user)
-    return _to_out(request, user)
+    return _to_out(request, user, db, ensure_login_link=True)
 
 
 @router.delete("/{username}")
