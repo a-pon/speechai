@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     yandex_api_key: str = ""
     yandex_folder_id: str = ""
     yandexgpt_model: str = "yandexgpt"
+    max_audio_duration_minutes: int = 90
     database_url: str = f"sqlite:///{ROOT_DIR / 'data' / 'speechai.db'}"
     audio_dir: Path = ROOT_DIR / "data" / "audio"
     evaluation_prompt_primary_path: Path = ROOT_DIR / "config" / "evaluation_prompt_primary_adult.txt"

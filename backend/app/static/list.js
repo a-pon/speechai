@@ -34,6 +34,12 @@ let recordChunks = [];
 let recordStartedAt = 0;
 let recordElapsedMs = 0;
 let recordTimerHandle = null;
+let recordAutoStopHandle = null;
+
+const RECORD_MAX_DURATION_MS = 90 * 60 * 1000;
+const RECORD_COORDINATION_KEY = "speechai-recording-event";
+const recordTabId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+const recordChannel = "BroadcastChannel" in window ? new BroadcastChannel("speechai-recording") : null;
 
 function canViewAllRecords(user) {
   return user?.role === "admin" || user?.can_view_all_records === true;
@@ -184,12 +190,68 @@ function stopRecordTimer() {
   }
 }
 
+function stopRecordAutoStop() {
+  if (recordAutoStopHandle) {
+    clearTimeout(recordAutoStopHandle);
+    recordAutoStopHandle = null;
+  }
+}
+
+function formatLimitDuration() {
+  return `${Math.floor(RECORD_MAX_DURATION_MS / 60000)} минут`;
+}
+
 function updateRecordTimer() {
   const elapsed = recordElapsedMs + (recordStartedAt ? Date.now() - recordStartedAt : 0);
   const totalSec = Math.max(0, Math.floor(elapsed / 1000));
   const min = Math.floor(totalSec / 60);
   const sec = totalSec % 60;
   recordTimer.textContent = `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+function scheduleRecordAutoStop() {
+  stopRecordAutoStop();
+  const elapsed = recordElapsedMs + (recordStartedAt ? Date.now() - recordStartedAt : 0);
+  const remaining = RECORD_MAX_DURATION_MS - elapsed;
+  if (remaining <= 0) {
+    uploadStatus.textContent = `Достигнут лимит записи ${formatLimitDuration()}. Отправляем запись в обработку.`;
+    stopRecording();
+    return;
+  }
+  recordAutoStopHandle = setTimeout(() => {
+    uploadStatus.textContent = `Достигнут лимит записи ${formatLimitDuration()}. Отправляем запись в обработку.`;
+    stopRecording();
+  }, remaining);
+}
+
+function currentRecordingUserKey() {
+  return currentUser?.username || "";
+}
+
+function publishRecordingEvent(type) {
+  const username = currentRecordingUserKey();
+  if (!username) return;
+  const message = {
+    type,
+    username,
+    tabId: recordTabId,
+    sentAt: Date.now(),
+  };
+  recordChannel?.postMessage(message);
+  try {
+    localStorage.setItem(RECORD_COORDINATION_KEY, JSON.stringify(message));
+  } catch {
+    // localStorage can be unavailable in private browsing modes.
+  }
+}
+
+function handleRecordingEvent(message) {
+  if (!message || message.tabId === recordTabId || message.username !== currentRecordingUserKey()) return;
+  if (message.type !== "recording-start-request") return;
+  if (!recordRecorder || recordRecorder.state === "inactive") return;
+
+  uploadStatus.textContent = "Открыта новая запись под этим логином. Текущая запись остановлена и отправляется в обработку.";
+  stopRecording();
 }
 
 function setRecordUi(state) {
@@ -273,6 +335,7 @@ function syncWorkspaceVisibility() {
 
 function cleanupRecording() {
   stopRecordTimer();
+  stopRecordAutoStop();
   recordStartedAt = 0;
   recordElapsedMs = 0;
   recordChunks = [];
@@ -315,8 +378,10 @@ async function sendRecordedAudio(blob, ext) {
 
 async function startRecording() {
   uploadStatus.textContent = "";
+  publishRecordingEvent("recording-start-request");
   setRecordUi("requesting");
   try {
+    await new Promise((resolve) => setTimeout(resolve, 300));
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
       throw new Error("Браузер не поддерживает запись звука");
     }
@@ -347,6 +412,7 @@ async function startRecording() {
     updateRecordTimer();
     stopRecordTimer();
     recordTimerHandle = setInterval(updateRecordTimer, 1000);
+    scheduleRecordAutoStop();
     setRecordUi("recording");
   } catch (err) {
     cleanupRecording();
@@ -361,11 +427,13 @@ function togglePauseRecording() {
     recordStartedAt = 0;
     recordRecorder.pause();
     stopRecordTimer();
+    stopRecordAutoStop();
     setRecordUi("paused");
   } else if (recordRecorder.state === "paused") {
     recordRecorder.resume();
     recordStartedAt = Date.now();
     recordTimerHandle = setInterval(updateRecordTimer, 1000);
+    scheduleRecordAutoStop();
     setRecordUi("recording");
   }
 }
@@ -377,6 +445,7 @@ function stopRecording() {
     recordStartedAt = 0;
   }
   stopRecordTimer();
+  stopRecordAutoStop();
   setRecordUi("busy");
   try {
     recordRecorder.stop();
@@ -738,6 +807,19 @@ recordPauseButton?.addEventListener("click", () => {
 
 recordStopButton?.addEventListener("click", () => {
   stopRecording();
+});
+
+recordChannel?.addEventListener("message", (event) => {
+  handleRecordingEvent(event.data);
+});
+
+window.addEventListener("storage", (event) => {
+  if (event.key !== RECORD_COORDINATION_KEY || !event.newValue) return;
+  try {
+    handleRecordingEvent(JSON.parse(event.newValue));
+  } catch {
+    // Ignore malformed coordination messages.
+  }
 });
 
 window.addEventListener("pageshow", () => {

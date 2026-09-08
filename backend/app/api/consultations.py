@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import Consultation
 from app.schemas import ConsultationDetail, ConsultationListItem, TranscriptSegmentOut, UploadResponse
+from app.services.audio_utils import get_duration_sec
 from app.services.pipeline import process_consultation
 
 router = APIRouter(prefix="/api/consultations", tags=["consultations"])
@@ -123,6 +124,17 @@ def _remove_consultation_files(consultation_id: str, audio_path: Path, settings_
         parent.rmdir()
 
 
+def _validate_audio_duration(audio_path: Path) -> int:
+    settings = get_settings()
+    duration_sec = get_duration_sec(audio_path)
+    max_duration_sec = settings.max_audio_duration_minutes * 60
+    if duration_sec is None:
+        raise HTTPException(400, "Не удалось определить длительность аудиозаписи")
+    if duration_sec > max_duration_sec:
+        raise HTTPException(400, f"Аудиозапись не должна быть длиннее {settings.max_audio_duration_minutes} минут")
+    return duration_sec
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_consultation(
     background_tasks: BackgroundTasks,
@@ -162,19 +174,26 @@ async def upload_consultation(
     with dest_path.open("wb") as out:
         shutil.copyfileobj(file.file, out)
 
-    audio_path = _normalize_browser_audio(dest_path)
-    parsed_consultation_date = _parse_ddmmyyyy_to_date(consultation_date)
-    if not parsed_consultation_date:
-        raise HTTPException(400, "Дата консультации обязательна")
-    normalized_consultation_type = _normalize_consultation_type(consultation_type)
-    normalized_clinic_division = _required_text(clinic_division, "Подразделение")
+    try:
+        audio_path = _normalize_browser_audio(dest_path)
+        duration_sec = _validate_audio_duration(audio_path)
+        parsed_consultation_date = _parse_ddmmyyyy_to_date(consultation_date)
+        if not parsed_consultation_date:
+            raise HTTPException(400, "Дата консультации обязательна")
+        normalized_consultation_type = _normalize_consultation_type(consultation_type)
+        normalized_clinic_division = _required_text(clinic_division, "Подразделение")
 
-    normalized_doctor_name = doctor_name.strip()
-    if user["role"] == "doctor":
-        normalized_doctor_name = user["doctor_name"] or user["username"]
-    elif not normalized_doctor_name:
-        raise HTTPException(400, "Имя врача обязательно")
-    normalized_patient_name = _required_text(patient_name, "Имя пациента")
+        normalized_doctor_name = doctor_name.strip()
+        if user["role"] == "doctor":
+            normalized_doctor_name = user["doctor_name"] or user["username"]
+        elif not normalized_doctor_name:
+            raise HTTPException(400, "Имя врача обязательно")
+        normalized_patient_name = _required_text(patient_name, "Имя пациента")
+        parsed_patient_birth_date = _parse_ddmmyyyy_to_date(patient_birth_date)
+        parsed_patient_age = _parse_optional_int(patient_age)
+    except HTTPException:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise
 
     consultation = Consultation(
         id=consultation_id,
@@ -184,8 +203,8 @@ async def upload_consultation(
         doctor_position=doctor_position,
         doctor_category=doctor_category,
         patient_code=patient_code,
-        patient_birth_date=_parse_ddmmyyyy_to_date(patient_birth_date),
-        patient_age=_parse_optional_int(patient_age),
+        patient_birth_date=parsed_patient_birth_date,
+        patient_age=parsed_patient_age,
         patient_gender=patient_gender,
         patient_phones_json=patient_phones_json,
         patient_emails_json=patient_emails_json,
@@ -196,6 +215,7 @@ async def upload_consultation(
         patient_name=normalized_patient_name,
         audio_path=str(audio_path),
         original_filename=file.filename,
+        duration_sec=duration_sec,
         status="uploaded",
     )
     db.add(consultation)
