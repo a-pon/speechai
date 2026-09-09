@@ -19,6 +19,7 @@ const usersTableBody = document.querySelector("#users-table tbody");
 const userCreateForm = document.getElementById("user-create-form");
 const userCreateStatus = document.getElementById("user-create-status");
 const recordFilters = document.getElementById("record-filters");
+const listTable = document.getElementById("list-table");
 const listBody = document.querySelector("#list-table tbody");
 const doctorNameInput = uploadForm.querySelector('[name="doctor_name"]');
 const consultationDateInput = uploadForm.querySelector('[name="consultation_date"]');
@@ -332,6 +333,7 @@ function syncWorkspaceVisibility() {
     uploadSection.hidden = false;
     onecSection.hidden = false;
     recordingPanel.hidden = false;
+    uploadForm.hidden = currentUser.role !== "admin";
     recordsSection.hidden = true;
     usersSection.hidden = true;
     return;
@@ -341,6 +343,7 @@ function syncWorkspaceVisibility() {
     uploadSection.hidden = true;
     onecSection.hidden = true;
     recordingPanel.hidden = true;
+    uploadForm.hidden = true;
     recordsSection.hidden = false;
     usersSection.hidden = true;
     return;
@@ -350,6 +353,7 @@ function syncWorkspaceVisibility() {
     uploadSection.hidden = true;
     onecSection.hidden = true;
     recordingPanel.hidden = true;
+    uploadForm.hidden = true;
     recordsSection.hidden = true;
     usersSection.hidden = !isAdmin;
   }
@@ -695,6 +699,7 @@ function recordMatchesFilters(item, filters) {
 function renderConsultations() {
   const filters = getRecordFilterValues();
   const items = consultationItems.filter((item) => recordMatchesFilters(item, filters));
+  const showDoctorColumn = canViewAllRecords(currentUser);
   listBody.innerHTML = "";
   items.forEach((item) => {
     const tr = document.createElement("tr");
@@ -704,7 +709,7 @@ function renderConsultations() {
       <td>${consultationTypeLabel(item.consultation_type)}</td>
       <td>${escapeHtml(item.clinic_division || "—")}</td>
       <td>${escapeHtml(item.patient_name)}</td>
-      <td>${escapeHtml(item.doctor_name)}</td>
+      ${showDoctorColumn ? `<td>${escapeHtml(item.doctor_name)}</td>` : ""}
       <td>${formatDuration(item.duration_sec)}</td>
       <td>${item.overall_score != null ? item.overall_score.toFixed(1) : "—"}</td>
       <td>
@@ -912,6 +917,9 @@ async function initWorkspace() {
   setView(initialView);
   const showDoctorFilter = canViewAllRecords(currentUser);
   recordFilters.querySelectorAll(".full-records-only").forEach((node) => {
+    node.hidden = !showDoctorFilter;
+  });
+  listTable.querySelectorAll(".full-records-only").forEach((node) => {
     node.hidden = !showDoctorFilter;
   });
   if (!showDoctorFilter) {
