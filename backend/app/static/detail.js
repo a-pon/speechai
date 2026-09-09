@@ -9,7 +9,7 @@ let currentUser = null;
 const authRetryDelayMs = 250;
 
 function canViewAllRecords(user) {
-  return user?.role === "admin" || user?.can_view_all_records === true;
+  return user?.role === "admin" || user?.role === "supervisor";
 }
 
 function consultationTypeLabel(value) {

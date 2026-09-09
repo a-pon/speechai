@@ -18,6 +18,7 @@ const onecForm = document.getElementById("onec-form");
 const usersTableBody = document.querySelector("#users-table tbody");
 const userCreateForm = document.getElementById("user-create-form");
 const userCreateStatus = document.getElementById("user-create-status");
+const recordFilters = document.getElementById("record-filters");
 const listBody = document.querySelector("#list-table tbody");
 const doctorNameInput = uploadForm.querySelector('[name="doctor_name"]');
 const consultationDateInput = uploadForm.querySelector('[name="consultation_date"]');
@@ -27,6 +28,7 @@ const clinicDivisionInput = uploadForm.querySelector('[name="clinic_division"]')
 let pollTimer = null;
 let currentUser = null;
 let activeView = "upload";
+let consultationItems = [];
 const authRetryDelayMs = 250;
 let recordStream = null;
 let recordRecorder = null;
@@ -42,7 +44,7 @@ const recordTabId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.rando
 const recordChannel = "BroadcastChannel" in window ? new BroadcastChannel("speechai-recording") : null;
 
 function canViewAllRecords(user) {
-  return user?.role === "admin" || user?.can_view_all_records === true;
+  return user?.role === "admin" || user?.role === "supervisor";
 }
 
 function formatIsoDate(value) {
@@ -54,13 +56,33 @@ function formatIsoDate(value) {
 
 function consultationTypeLabel(value) {
   if (value === "primary_child") return "Первичная детская";
-  if (value === "repeat_adult") return "Повторная";
-  return "Первичная";
+  if (value === "repeat_adult") return "Повторная взрослая";
+  return "Первичная взрослая";
+}
+
+function formatDisplayDate(value) {
+  if (!value) return "—";
+  const trimmed = String(value).trim();
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return `${isoMatch[3]}-${isoMatch[2]}-${isoMatch[1]}`;
+  const dmyMatch = trimmed.match(/^(\d{2})[./-](\d{2})[./-](\d{4})$/);
+  if (dmyMatch) return `${dmyMatch[1]}-${dmyMatch[2]}-${dmyMatch[3]}`;
+  return trimmed;
 }
 
 function formatDmyDate(value) {
   if (!value) return "";
   const trimmed = String(value).trim();
+  if (!trimmed) return "";
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return trimmed;
+  const dmyMatch = trimmed.match(/^(\d{2})[./-](\d{2})[./-](\d{4})$/);
+  if (dmyMatch) return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+  return trimmed;
+}
+
+function parseFilterDate(value) {
+  const trimmed = String(value || "").trim();
   if (!trimmed) return "";
   const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoMatch) return trimmed;
@@ -574,7 +596,7 @@ function applyQueryToUploadForm() {
   const params = new URLSearchParams(window.location.search);
   const doctorFullName = params.get("doctor_full_name") || currentUser?.doctor_name || currentUser?.username || "";
   const patientFullName = params.get("patient_full_name") || "";
-  doctorNameInput.value = currentUser?.role === "doctor" ? (currentUser.doctor_name || currentUser.username) : doctorFullName;
+  doctorNameInput.value = currentUser?.role === "doctor" || currentUser?.role === "supervisor" ? (currentUser.doctor_name || currentUser.username) : doctorFullName;
   if (patientFullName) {
     uploadForm.querySelector('[name="patient_name"]').value = patientFullName;
   }
@@ -636,22 +658,60 @@ function applyOnecToUploadForm() {
 
 async function fetchConsultations() {
   const res = await apiFetch("/api/consultations");
-  const items = await res.json();
+  consultationItems = await res.json();
+  renderConsultations();
+
+  const pending = consultationItems.some((i) => i.status === "processing" || i.status === "uploaded");
+  if (pending && !pollTimer) {
+    pollTimer = setInterval(fetchConsultations, 3000);
+  }
+  if (!pending && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function getRecordFilterValues() {
+  const fd = new FormData(recordFilters);
+  const value = (name) => String(fd.get(name) || "").trim().toLowerCase();
+  return {
+    consultation_date: parseFilterDate(fd.get("consultation_date")),
+    consultation_type: String(fd.get("consultation_type") || "").trim(),
+    clinic_division: value("clinic_division"),
+    patient_name: value("patient_name"),
+    doctor_name: value("doctor_name"),
+  };
+}
+
+function recordMatchesFilters(item, filters) {
+  if (filters.consultation_date && item.consultation_date !== filters.consultation_date) return false;
+  if (filters.consultation_type && item.consultation_type !== filters.consultation_type) return false;
+  if (filters.clinic_division && !String(item.clinic_division || "").toLowerCase().includes(filters.clinic_division)) return false;
+  if (filters.patient_name && !String(item.patient_name || "").toLowerCase().includes(filters.patient_name)) return false;
+  if (filters.doctor_name && !String(item.doctor_name || "").toLowerCase().includes(filters.doctor_name)) return false;
+  return true;
+}
+
+function renderConsultations() {
+  const filters = getRecordFilterValues();
+  const items = consultationItems.filter((item) => recordMatchesFilters(item, filters));
   listBody.innerHTML = "";
   items.forEach((item) => {
     const tr = document.createElement("tr");
     const canDelete = currentUser && (canViewAllRecords(currentUser) || currentUser.doctor_name === item.doctor_name);
     tr.innerHTML = `
-      <td>${item.consultation_date}</td>
+      <td>${formatDisplayDate(item.consultation_date)}</td>
       <td>${consultationTypeLabel(item.consultation_type)}</td>
       <td>${escapeHtml(item.clinic_division || "—")}</td>
       <td>${escapeHtml(item.patient_name)}</td>
       <td>${escapeHtml(item.doctor_name)}</td>
       <td>${formatDuration(item.duration_sec)}</td>
       <td>${item.overall_score != null ? item.overall_score.toFixed(1) : "—"}</td>
-      <td class="row-actions">
-        <span class="status-badge ${item.status}">${statusLabel(item.status)}</span>
-        ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
+      <td>
+        <div class="row-actions">
+          <span class="status-badge ${item.status}">${statusLabel(item.status)}</span>
+          ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
+        </div>
       </td>
     `;
     tr.querySelector(".btn-delete")?.addEventListener("click", async (e) => {
@@ -667,16 +727,13 @@ async function fetchConsultations() {
     });
     listBody.appendChild(tr);
   });
-
-  const pending = items.some((i) => i.status === "processing" || i.status === "uploaded");
-  if (pending && !pollTimer) {
-    pollTimer = setInterval(fetchConsultations, 3000);
-  }
-  if (!pending && pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
 }
+
+recordFilters?.addEventListener("input", renderConsultations);
+recordFilters?.addEventListener("change", renderConsultations);
+recordFilters?.addEventListener("reset", () => {
+  setTimeout(renderConsultations, 0);
+});
 
 async function loadUsers() {
   if (!currentUser || currentUser.role !== "admin") return;
@@ -691,6 +748,7 @@ async function loadUsers() {
       <td>
         <select class="u-role">
           <option value="doctor" ${user.role === "doctor" ? "selected" : ""}>doctor</option>
+          <option value="supervisor" ${user.role === "supervisor" ? "selected" : ""}>supervisor</option>
           <option value="admin" ${user.role === "admin" ? "selected" : ""}>admin</option>
         </select>
       </td>
@@ -852,6 +910,13 @@ async function initWorkspace() {
         ? "users"
         : "upload";
   setView(initialView);
+  const showDoctorFilter = canViewAllRecords(currentUser);
+  recordFilters.querySelectorAll(".full-records-only").forEach((node) => {
+    node.hidden = !showDoctorFilter;
+  });
+  if (!showDoctorFilter) {
+    recordFilters.querySelector('[name="doctor_name"]').value = "";
+  }
   if (initialView === "upload") {
     setRecordUi("idle");
   }

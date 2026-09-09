@@ -152,11 +152,12 @@
         <label>Роль
           <select name="role" required>
             <option value="doctor">doctor</option>
+            <option value="supervisor">supervisor</option>
             <option value="admin">admin</option>
           </select>
         </label>
         <label>Имя врача
-          <input type="text" name="doctor_name" placeholder="Для doctor заполняется автоматически">
+          <input type="text" name="doctor_name" required>
         </label>
         <label>Пароль
           <input type="text" name="password" required maxlength="8" minlength="8">
@@ -182,21 +183,46 @@
 
     <section id="records-section" hidden>
       <h2>Записи</h2>
-      <table id="list-table">
-        <thead>
-          <tr>
-            <th>Дата</th>
-            <th>Вид</th>
-            <th>Подразделение</th>
-            <th>Пациент</th>
-            <th>Врач</th>
-            <th>Длительность</th>
-            <th>Оценка</th>
-            <th>Статус</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <form id="record-filters" class="filters-form">
+        <label>Дата
+          <input type="date" name="consultation_date">
+        </label>
+        <label>Вид
+          <select name="consultation_type">
+            <option value="">Все</option>
+            <option value="primary_adult">Первичная взрослая</option>
+            <option value="repeat_adult">Повторная</option>
+            <option value="primary_child">Первичная детская</option>
+          </select>
+        </label>
+        <label>Подразделение
+          <input type="text" name="clinic_division">
+        </label>
+        <label>Пациент
+          <input type="text" name="patient_name">
+        </label>
+        <label class="full-records-only">Врач
+          <input type="text" name="doctor_name">
+        </label>
+        <button type="reset">Сбросить</button>
+      </form>
+      <div class="table-scroll">
+        <table id="list-table">
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>Вид</th>
+              <th>Подразделение</th>
+              <th>Пациент</th>
+              <th>Врач</th>
+              <th>Длительность</th>
+              <th>Оценка</th>
+              <th>Статус</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
       <p class="hint">Нажмите на строку, чтобы открыть карточку.</p>
     </section>
   </main>

@@ -19,33 +19,25 @@ AUTH_COOKIE_NAME = "speechai_auth"
 
 class UserInfo(TypedDict):
     username: str
-    role: Literal["admin", "doctor"]
+    role: Literal["admin", "doctor", "supervisor"]
     doctor_name: str | None
     can_view_all_records: bool
 
 
+DOCTOR_ROLES = {"doctor", "supervisor"}
+USER_ROLES = {"admin", "doctor", "supervisor"}
+
 DEFAULT_USERS: list[dict[str, str]] = [
     {"username": "admin", "password": "Q7m4Lp8Z", "role": "admin", "doctor_name": "admin"},
-    {"username": "Кухтарская Татьяна", "password": "N6v2Ts5K", "role": "doctor", "doctor_name": "Кухтарская Татьяна"},
-    {"username": "Кудзиева Тамара", "password": "H8r3Qp1M", "role": "doctor", "doctor_name": "Кудзиева Тамара"},
+    {"username": "Кухтарская Татьяна", "password": "N6v2Ts5K", "role": "supervisor", "doctor_name": "Кухтарская Татьяна"},
+    {"username": "Кудзиева Тамара", "password": "H8r3Qp1M", "role": "supervisor", "doctor_name": "Кудзиева Тамара"},
     {"username": "Иваненчук Иван", "password": "X4c9Wz2D", "role": "doctor", "doctor_name": "Иваненчук Иван"},
     {"username": "Корнилова Анастасия", "password": "P5t7Jn8A", "role": "doctor", "doctor_name": "Корнилова Анастасия"},
 ]
 
-FULL_RECORD_ACCESS_USERS = {"Кухтарская Татьяна", "Кудзиева Тамара"}
-
 
 def has_full_record_access(username: str, role: str, doctor_name: str | None = None) -> bool:
-    if role == "admin":
-        return True
-    names = [username.strip()]
-    if doctor_name:
-        names.append(doctor_name.strip())
-    for name in names:
-        surname = name.split(" ", 1)[0] if name else ""
-        if name in FULL_RECORD_ACCESS_USERS or surname in FULL_RECORD_ACCESS_USERS:
-            return True
-    return False
+    return role in {"admin", "supervisor"}
 
 
 def _password_hash(password: str) -> str:
@@ -76,7 +68,7 @@ def create_default_users(db: Session) -> None:
         )
     db.commit()
     for entry in DEFAULT_USERS:
-        if entry["role"] == "doctor":
+        if entry["role"] in DOCTOR_ROLES:
             get_or_create_doctor_link_token(db, entry["username"])
 
 
@@ -104,7 +96,7 @@ def _normalize_user(user: UserInfo | dict) -> UserInfo | None:
         return None
     username = str(user.get("username") or "").strip()
     role = user.get("role")
-    if role not in {"admin", "doctor"} or not username:
+    if role not in USER_ROLES or not username:
         return None
     doctor_name = user.get("doctor_name")
     if doctor_name is not None:
@@ -113,7 +105,7 @@ def _normalize_user(user: UserInfo | dict) -> UserInfo | None:
         "username": username,
         "role": role,
         "doctor_name": doctor_name,
-        "can_view_all_records": bool(user.get("can_view_all_records", False) or has_full_record_access(username, role, doctor_name)),
+        "can_view_all_records": has_full_record_access(username, role, doctor_name),
     }
 
 
@@ -208,7 +200,7 @@ def build_doctor_login_link(
     normalized_username = username.strip()
     if db is not None:
         user = db.get(User, normalized_username)
-        if not user or user.role != "doctor":
+        if not user or user.role not in DOCTOR_ROLES:
             return None
         token = get_or_create_doctor_link_token(db, normalized_username, next_path=next_path, payload=payload)
         path = f"/api/integration/link-doctor?token={token}"
@@ -217,7 +209,7 @@ def build_doctor_login_link(
     db = SessionLocal()
     try:
         user = db.get(User, normalized_username)
-        if not user or user.role != "doctor":
+        if not user or user.role not in DOCTOR_ROLES:
             return None
         token = get_or_create_doctor_link_token(db, normalized_username, next_path=next_path, payload=payload)
     finally:
@@ -235,7 +227,7 @@ def build_existing_doctor_login_link(
 
     def build_with_db(session: Session) -> str | None:
         user = session.get(User, normalized_username)
-        if not user or user.role != "doctor":
+        if not user or user.role not in DOCTOR_ROLES:
             return None
         link = _find_active_doctor_link_token(session, normalized_username)
         if not link:
@@ -339,7 +331,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> UserInf
 
 
 def can_view_all_records(user: UserInfo) -> bool:
-    return bool(user.get("can_view_all_records") or user["role"] == "admin")
+    return user["role"] in {"admin", "supervisor"}
 
 
 def can_access_doctor_record(user: UserInfo, doctor_name: str) -> bool:
@@ -355,7 +347,7 @@ def login_doctor_by_token(token: str | None, db: Session) -> UserInfo | None:
         if not username:
             return None
         user = db.get(User, username)
-    if not user or user.role != "doctor":
+    if not user or user.role not in DOCTOR_ROLES:
         return None
     return {
         "username": user.username,

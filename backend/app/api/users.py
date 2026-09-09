@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.auth import build_doctor_login_link, build_existing_doctor_login_link, build_password_hash, get_current_user
+from app.auth import DOCTOR_ROLES, USER_ROLES, build_doctor_login_link, build_existing_doctor_login_link, build_password_hash, get_current_user
 from app.db import get_db
 from app.models import User
 from app.schemas import UserCreateIn, UserOut, UserUpdateIn
@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 def _to_out(request: Request, user: User, db: Session, ensure_login_link: bool = False) -> UserOut:
     login_link = None
-    if user.role == "doctor":
+    if user.role in DOCTOR_ROLES:
         link_builder = build_doctor_login_link if ensure_login_link else build_existing_doctor_login_link
         login_link = link_builder(user.username, str(request.base_url).rstrip("/"), db=db)
     return UserOut(
@@ -41,13 +41,18 @@ def create_user(payload: UserCreateIn, request: Request, db: Session = Depends(g
         raise HTTPException(400, "Имя пользователя обязательно")
     if db.get(User, username):
         raise HTTPException(409, "Пользователь уже существует")
-    if payload.role not in {"admin", "doctor"}:
+    if payload.role not in USER_ROLES:
         raise HTTPException(400, "Недопустимая роль")
+    doctor_name = payload.doctor_name.strip() if payload.doctor_name else ""
+    if not doctor_name:
+        raise HTTPException(400, "Имя врача обязательно")
+    if not payload.password.strip():
+        raise HTTPException(400, "Пароль обязателен")
 
     user = User(
         username=username,
         role=payload.role,
-        doctor_name=payload.doctor_name.strip() if payload.doctor_name else (username if payload.role == "doctor" else None),
+        doctor_name=doctor_name,
         password_hash=build_password_hash(payload.password),
     )
     db.add(user)
@@ -68,15 +73,15 @@ def update_user(
     if not user:
         raise HTTPException(404, "Пользователь не найден")
     if payload.role is not None:
-        if payload.role not in {"admin", "doctor"}:
+        if payload.role not in USER_ROLES:
             raise HTTPException(400, "Недопустимая роль")
         user.role = payload.role
     if payload.doctor_name is not None:
         user.doctor_name = payload.doctor_name.strip() or None
     if payload.password:
         user.password_hash = build_password_hash(payload.password)
-    if user.role == "doctor" and not user.doctor_name:
-        user.doctor_name = user.username
+    if not user.doctor_name:
+        raise HTTPException(400, "Имя врача обязательно")
     db.commit()
     db.refresh(user)
     return _to_out(request, user, db, ensure_login_link=True)

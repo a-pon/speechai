@@ -73,7 +73,7 @@ async function deleteConsultation(id) {
 function renderAuthBar(user) {
   const authBar = document.getElementById("auth-bar");
   if (!authBar || !user) return;
-  const roleLabel = user.role === "admin" ? "Админ" : "Врач";
+  const roleLabel = user.role === "admin" ? "Админ" : user.role === "supervisor" ? "Старший врач" : "Врач";
   const nameLabel = user.doctor_name ? ` · ${escapeHtml(user.doctor_name)}` : "";
   authBar.hidden = false;
   authBar.innerHTML = `

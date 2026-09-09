@@ -184,7 +184,7 @@ async def upload_consultation(
         normalized_clinic_division = _required_text(clinic_division, "Подразделение")
 
         normalized_doctor_name = doctor_name.strip()
-        if user["role"] == "doctor":
+        if user["role"] in {"doctor", "supervisor"}:
             normalized_doctor_name = user["doctor_name"] or user["username"]
         elif not normalized_doctor_name:
             raise HTTPException(400, "Имя врача обязательно")
