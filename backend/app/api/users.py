@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from app.auth import DOCTOR_ROLES, USER_ROLES, build_doctor_login_link, build_existing_doctor_login_link, build_password_hash, get_current_user
@@ -30,7 +31,13 @@ def _require_admin(user=Depends(get_current_user)):
 
 @router.get("", response_model=list[UserOut])
 def list_users(request: Request, db: Session = Depends(get_db), _user=Depends(_require_admin)):
-    users = db.query(User).order_by(User.role, User.username).all()
+    role_order = case(
+        (User.role == "admin", 0),
+        (User.role == "supervisor", 1),
+        (User.role == "doctor", 2),
+        else_=3,
+    )
+    users = db.query(User).order_by(role_order, User.username).all()
     return [_to_out(request, user, db) for user in users]
 
 
