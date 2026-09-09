@@ -1,4 +1,5 @@
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   font-family: system-ui, sans-serif;
   max-width: 1200px;
