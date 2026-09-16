@@ -38,7 +38,7 @@ def list_users(request: Request, db: Session = Depends(get_db), _user=Depends(_r
         else_=3,
     )
     users = db.query(User).order_by(role_order, User.username).all()
-    return [_to_out(request, user, db) for user in users]
+    return [_to_out(request, user, db, ensure_login_link=True) for user in users]
 
 
 @router.post("", response_model=UserOut)

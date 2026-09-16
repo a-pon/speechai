@@ -15,6 +15,7 @@ from app.db import SessionLocal, get_db
 from app.models import DoctorLinkToken, User
 
 AUTH_COOKIE_NAME = "speechai_auth"
+DOCTOR_LINK_TOKEN_TTL_DAYS = 3650
 
 
 class UserInfo(TypedDict):
@@ -136,7 +137,7 @@ def _issue_doctor_link_token(
     next_path: str | None = None,
     payload: dict[str, object] | None = None,
 ) -> str:
-    expires_at = datetime.utcnow() + timedelta(days=30)
+    expires_at = datetime.utcnow() + timedelta(days=DOCTOR_LINK_TOKEN_TTL_DAYS)
     next_value = next_path or "/"
     payload_json = _build_doctor_link_payload(payload)
     for _ in range(10):
@@ -163,7 +164,6 @@ def _find_active_doctor_link_token(
     next_path: str | None = None,
     payload: dict[str, object] | None = None,
 ) -> DoctorLinkToken | None:
-    expires_at = datetime.utcnow()
     next_value = next_path or "/"
     payload_json = _build_doctor_link_payload(payload)
     return db.scalar(
@@ -172,7 +172,6 @@ def _find_active_doctor_link_token(
             DoctorLinkToken.username == username,
             DoctorLinkToken.next_path == next_value,
             DoctorLinkToken.payload_json == payload_json,
-            DoctorLinkToken.expires_at >= expires_at,
         )
         .order_by(DoctorLinkToken.created_at.asc())
     )
@@ -250,11 +249,6 @@ def _load_doctor_link_token(db: Session, token: str | None) -> DoctorLinkToken |
         return None
     link = db.get(DoctorLinkToken, token.strip())
     if not link:
-        return None
-    expires_at = link.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
         return None
     return link
 
