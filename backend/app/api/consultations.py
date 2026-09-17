@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import Consultation
 from app.schemas import ConsultationDetail, ConsultationListItem, TranscriptSegmentOut, UploadResponse
+from app.services.audio_export import export_audio_file
 from app.services.audio_utils import get_duration_sec
 from app.services.pipeline import process_consultation
 
@@ -277,6 +278,40 @@ def delete_consultation(
     _remove_consultation_files(consultation_id, audio_path, settings.audio_dir)
 
     return {"ok": True, "message": "Запись удалена"}
+
+
+@router.post("/{consultation_id}/export-audio")
+def export_consultation_audio(
+    consultation_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user["role"] != "admin":
+        raise HTTPException(403, "Только для администратора")
+
+    row = db.get(Consultation, consultation_id)
+    if not row:
+        raise HTTPException(404, "Запись не найдена")
+
+    audio_path = Path(row.audio_path)
+    if not audio_path.is_absolute():
+        audio_path = Path.cwd() / audio_path
+
+    try:
+        result = export_audio_file(consultation_id, audio_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "ok": True,
+        "message": "Аудио выгружено",
+        "remote_audio_path": result.remote_audio_path,
+        "remote_checksum_path": result.remote_checksum_path,
+        "sha256": result.sha256,
+        "local_deleted": result.local_deleted,
+    }
 
 
 @router.get("/{consultation_id}", response_model=ConsultationDetail)

@@ -18,6 +18,19 @@ function consultationTypeLabel(value) {
   return "Первичная взрослая";
 }
 
+function formatErrorMessage(err, fallback) {
+  if (!err) return fallback;
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message || fallback;
+  if (typeof err === "object") {
+    if (typeof err.detail === "string") return err.detail;
+    if (Array.isArray(err.detail)) return err.detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
+    if (err.detail != null) return JSON.stringify(err.detail);
+    return JSON.stringify(err);
+  }
+  return fallback;
+}
+
 async function loadDetail() {
   const res = await apiFetch(`/api/consultations/${consultationId}`);
   if (!res.ok) {
@@ -33,6 +46,7 @@ async function loadDetail() {
   document.title = `${data.patient_name} — SpeechAI`;
 
   const canDelete = currentUser && (canViewAllRecords(currentUser) || currentUser.doctor_name === data.doctor_name);
+  const canExportAudio = currentUser?.role === "admin";
   detailHeader.innerHTML = `
     <div class="meta">
       <div><strong>Пациент:</strong> ${escapeHtml(data.patient_name)}</div>
@@ -43,8 +57,12 @@ async function loadDetail() {
       <div><strong>Оценка:</strong> ${data.overall_score != null ? data.overall_score.toFixed(1) + " / 5" : "—"}</div>
       <div class="status-row">
         <span><strong>Статус:</strong> <span class="status-badge ${data.status}">${statusLabel(data.status)}</span></span>
-        ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
+        <span class="detail-actions">
+          ${canExportAudio ? '<button type="button" id="export-audio-button">Выгрузить аудио</button>' : ""}
+          ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
+        </span>
       </div>
+      ${canExportAudio ? '<div id="export-audio-status" class="status"></div>' : ""}
       ${data.error_message ? `<div class="error-text"><strong>Ошибка:</strong> ${escapeHtml(data.error_message)}</div>` : ""}
     </div>
   `;
@@ -56,6 +74,27 @@ async function loadDetail() {
         if (await deleteConsultation(consultationId)) window.location.href = "/";
       } catch (err) {
         alert("Ошибка: " + err.message);
+      }
+    };
+  }
+
+  const exportAudioBtn = detailHeader.querySelector("#export-audio-button");
+  if (exportAudioBtn) {
+    const exportStatus = detailHeader.querySelector("#export-audio-status");
+    exportAudioBtn.onclick = async () => {
+      exportAudioBtn.disabled = true;
+      exportStatus.textContent = "Выгружаем аудио...";
+      try {
+        const resExport = await apiFetch(`/api/consultations/${consultationId}/export-audio`, { method: "POST" });
+        const payload = await resExport.json().catch(() => ({}));
+        if (!resExport.ok) {
+          throw new Error(formatErrorMessage(payload, "Не удалось выгрузить аудио"));
+        }
+        exportStatus.textContent = `Аудио выгружено: ${payload.remote_audio_path || "готово"}`;
+      } catch (err) {
+        exportStatus.textContent = "Ошибка выгрузки: " + formatErrorMessage(err, "Не удалось выгрузить аудио");
+      } finally {
+        exportAudioBtn.disabled = false;
       }
     };
   }

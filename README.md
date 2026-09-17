@@ -102,6 +102,24 @@ docker compose up -d
 
 Контейнер публикует FastAPI только на `127.0.0.1:8000`; внешний HTTPS должен принимать nginx.
 
+## Ручная выгрузка аудио
+
+Временная кнопка `Выгрузить аудио` доступна только администратору в карточке записи. Она отправляет локальный аудиофайл и файл SHA256 на удалённый сервер через `rsync` поверх SSH.
+
+Настройки:
+
+```env
+REMOTE_AUDIO_ENABLED=true
+REMOTE_AUDIO_HOST=10.77.0.2
+REMOTE_AUDIO_PORT=22
+REMOTE_AUDIO_USER=speechai-storage
+REMOTE_AUDIO_BASE_DIR=/srv/speechai/audio
+REMOTE_AUDIO_SSH_KEY=/path/to/private/key
+REMOTE_AUDIO_DELETE_LOCAL_AFTER_UPLOAD=false
+```
+
+WireGuard настраивается на уровне сервера, не в `.env` приложения.
+
 ## HTTPS через nginx
 
 Готовый пример конфига: `deploy/nginx/speechai.conf`.

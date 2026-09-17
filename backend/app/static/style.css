@@ -130,6 +130,12 @@ tbody tr:hover { background: #f5f5f5; }
   gap: 0.75rem;
   flex-wrap: wrap;
 }
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
 .btn-delete {
   font-size: 0.75rem;
   padding: 0.15rem 0.45rem;

@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     yandex_folder_id: str = ""
     yandexgpt_model: str = "yandexgpt"
     max_audio_duration_minutes: int = 90
+    remote_audio_enabled: bool = False
+    remote_audio_host: str = ""
+    remote_audio_port: int = 22
+    remote_audio_user: str = ""
+    remote_audio_base_dir: str = ""
+    remote_audio_ssh_key: str = ""
+    remote_audio_delete_local_after_upload: bool = False
     database_url: str = f"sqlite:///{ROOT_DIR / 'data' / 'speechai.db'}"
     audio_dir: Path = ROOT_DIR / "data" / "audio"
     evaluation_prompt_primary_path: Path = ROOT_DIR / "config" / "evaluation_prompt_primary_adult.txt"
