@@ -39,7 +39,7 @@ let recordElapsedMs = 0;
 let recordTimerHandle = null;
 let recordAutoStopHandle = null;
 
-const RECORD_MAX_DURATION_MS = 90 * 60 * 1000;
+let recordMaxDurationMs = 90 * 60 * 1000;
 const RECORD_COORDINATION_KEY = "speechai-recording-event";
 const recordTabId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 const recordChannel = "BroadcastChannel" in window ? new BroadcastChannel("speechai-recording") : null;
@@ -221,7 +221,7 @@ function stopRecordAutoStop() {
 }
 
 function formatLimitDuration() {
-  return `${Math.floor(RECORD_MAX_DURATION_MS / 60000)} минут`;
+  return `${Math.floor(recordMaxDurationMs / 60000)} минут`;
 }
 
 function updateRecordTimer() {
@@ -235,7 +235,7 @@ function updateRecordTimer() {
 function scheduleRecordAutoStop() {
   stopRecordAutoStop();
   const elapsed = recordElapsedMs + (recordStartedAt ? Date.now() - recordStartedAt : 0);
-  const remaining = RECORD_MAX_DURATION_MS - elapsed;
+  const remaining = recordMaxDurationMs - elapsed;
   if (remaining <= 0) {
     uploadStatus.textContent = `Достигнут лимит записи ${formatLimitDuration()}. Отправляем запись в обработку.`;
     stopRecording();
@@ -758,7 +758,7 @@ async function loadUsers() {
         </select>
       </td>
       <td><input type="text" class="u-doctor-name" value="${escapeHtml(user.doctor_name || "")}"></td>
-      <td><input type="text" class="u-password" maxlength="8" minlength="8" placeholder="новый пароль"></td>
+      <td><input type="text" class="u-password" placeholder="новый пароль"></td>
       <td><input type="text" class="u-token" value="${escapeHtml(loginToken)}" readonly></td>
       <td class="row-actions">
         <button type="button" class="btn-save">Сохранить</button>
@@ -934,6 +934,20 @@ async function initWorkspace() {
   }
 }
 
+async function loadRuntimeConfig() {
+  try {
+    const res = await apiFetch("/health");
+    if (!res.ok) return;
+    const data = await res.json();
+    const minutes = Number(data.max_audio_duration_minutes);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      recordMaxDurationMs = minutes * 60 * 1000;
+    }
+  } catch {
+    // Keep the built-in fallback if runtime settings cannot be loaded.
+  }
+}
+
 async function getCurrentUserWithRetry() {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const user = await getCurrentUser();
@@ -947,6 +961,7 @@ async function getCurrentUserWithRetry() {
 
 async function initPage() {
   setupTabs();
+  await loadRuntimeConfig();
   currentUser = await getCurrentUserWithRetry();
   if (!currentUser) {
     loginSection.hidden = false;

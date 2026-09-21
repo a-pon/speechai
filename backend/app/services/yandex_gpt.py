@@ -28,6 +28,20 @@ def _parse_overall_score(report: str) -> float | None:
         return None
 
 
+def _is_moderation_refusal(data: dict, alternative: dict, report: str) -> bool:
+    details = data.get("incomplete_details") or data.get("incompleteDetails") or {}
+    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+    result_details = result.get("incomplete_details") or result.get("incompleteDetails") or {}
+    reason = details.get("reason") or result_details.get("reason")
+    status = alternative.get("status") or data.get("status") or result.get("status")
+    normalized_report = report.replace("ё", "е").strip().lower()
+    return (
+        reason == "content_filter"
+        or status in {"incomplete", "ALTERNATIVE_STATUS_CONTENT_FILTER"}
+        or normalized_report.startswith("я не могу обсуждать эту тему")
+    )
+
+
 async def evaluate_transcript(transcript: str, consultation_type: str = "primary_adult") -> tuple[str, float | None]:
     settings = get_settings()
     if settings.mock_ai:
@@ -63,5 +77,11 @@ async def evaluate_transcript(transcript: str, consultation_type: str = "primary
         response.raise_for_status()
         data = response.json()
 
-    report = data["result"]["alternatives"][0]["message"]["text"]
+    alternative = data["result"]["alternatives"][0]
+    report = alternative["message"]["text"]
+    if _is_moderation_refusal(data, alternative, report):
+        raise RuntimeError(
+            "YandexGPT: оценка заблокирована модерацией content_filter. "
+            "Нужна настройка правил модерации/инстанса в AI Studio или повторная обработка с другим YandexGPT-инстансом."
+        )
     return report, _parse_overall_score(report)

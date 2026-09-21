@@ -40,6 +40,13 @@ def _ms(value: str | int | float | None, default: int = 0) -> int:
         return default
 
 
+def _get_any(payload: dict, *keys: str):
+    for key in keys:
+        if key in payload:
+            return payload.get(key)
+    return None
+
+
 def _channel_index(raw: str | int | None) -> int:
     if raw is None:
         return 0
@@ -74,8 +81,8 @@ def _extract_from_alternative(
     text = (alt.get("text") or "").strip()
     if not text:
         return None
-    start = _ms(alt.get("startTimeMs") or alt.get("start_time_ms"))
-    end = _ms(alt.get("endTimeMs") or alt.get("end_time_ms"), start + 1000)
+    start = _ms(_get_any(alt, "startTimeMs", "start_time_ms"))
+    end = _ms(_get_any(alt, "endTimeMs", "end_time_ms"), start + 1000)
     role = "doctor" if channel == 0 else "patient"
     return TranscriptSegment(
         speaker_role=role,
@@ -96,11 +103,12 @@ def _parse_recognition_events(events: list[dict]) -> list[TranscriptSegment]:
         payload = envelope.get("result") if isinstance(envelope.get("result"), dict) else envelope
         if not isinstance(payload, dict):
             continue
-        channel = _channel_index(payload.get("channelTag") or payload.get("channel_tag"))
+        channel = _channel_index(_get_any(payload, "channelTag", "channel_tag"))
+        audio_cursors = _get_any(payload, "audioCursors", "audio_cursors") or {}
         final = payload.get("final")
         if isinstance(final, dict):
-            channel = _channel_index(final.get("channelTag") or channel)
-            final_index = str(final.get("finalIndex") or payload.get("audioCursors", {}).get("finalIndex") or order)
+            channel = _channel_index(_get_any(final, "channelTag", "channel_tag") or channel)
+            final_index = str(_get_any(final, "finalIndex", "final_index") or _get_any(audio_cursors, "finalIndex", "final_index") or order)
             alts = final.get("alternatives") or []
             if alts:
                 seg = _extract_from_alternative(alts[0], channel, order)
@@ -108,13 +116,13 @@ def _parse_recognition_events(events: list[dict]) -> list[TranscriptSegment]:
                     by_key[(channel, final_index)] = seg
                     order += 1
 
-        refinement = payload.get("finalRefinement")
+        refinement = _get_any(payload, "finalRefinement", "final_refinement")
         if isinstance(refinement, dict):
-            final_index = str(refinement.get("finalIndex") or "0")
-            normalized = refinement.get("normalizedText") or {}
+            final_index = str(_get_any(refinement, "finalIndex", "final_index") or "0")
+            normalized = _get_any(refinement, "normalizedText", "normalized_text") or {}
             alts = normalized.get("alternatives") or []
             if alts:
-                ch = _channel_index(normalized.get("channelTag") or channel)
+                ch = _channel_index(_get_any(normalized, "channelTag", "channel_tag") or channel)
                 seg = _extract_from_alternative(alts[0], ch, order)
                 if seg:
                     by_key[(ch, final_index)] = seg
@@ -170,7 +178,7 @@ async def _fetch_recognition_results(client: httpx.AsyncClient, operation_id: st
     resp = await client.get(
         GET_RECOGNITION_URL,
         headers=_headers(json_body=False),
-        params={"operation_id": operation_id},
+        params={"operationId": operation_id},
     )
     resp.raise_for_status()
     return _parse_ndjson(resp.text)
