@@ -33,7 +33,13 @@ app = FastAPI(title="SpeechAI", version=APP_VERSION)
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
-    restart_pending_consultations()
+    if get_settings().recover_pending_on_startup:
+        restart_pending_consultations()
+
+
+def _run_pending_consultations(consultation_ids: list[str]) -> None:
+    for consultation_id in consultation_ids:
+        _run_pipeline(consultation_id)
 
 
 def restart_pending_consultations() -> None:
@@ -45,8 +51,8 @@ def restart_pending_consultations() -> None:
     finally:
         db.close()
 
-    for consultation_id in consultation_ids:
-        threading.Thread(target=_run_pipeline, args=(consultation_id,), daemon=True).start()
+    if consultation_ids:
+        threading.Thread(target=_run_pending_consultations, args=(consultation_ids,), daemon=True).start()
 
 
 @app.get("/health")
@@ -58,6 +64,7 @@ def health():
         "pages": ["/", "/record/{id}"],
         "port": APP_PORT,
         "max_audio_duration_minutes": settings.max_audio_duration_minutes,
+        "recover_pending_on_startup": settings.recover_pending_on_startup,
     }
 
 

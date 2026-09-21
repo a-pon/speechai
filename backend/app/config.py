@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     yandex_folder_id: str = ""
     yandexgpt_model: str = "yandexgpt"
     max_audio_duration_minutes: int = 90
+    recover_pending_on_startup: bool = False
     remote_audio_enabled: bool = False
     remote_audio_host: str = ""
     remote_audio_port: int = 22
