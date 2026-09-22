@@ -704,6 +704,7 @@ function renderConsultations() {
   items.forEach((item) => {
     const tr = document.createElement("tr");
     const canDelete = currentUser && (canViewAllRecords(currentUser) || currentUser.doctor_name === item.doctor_name);
+    const canRetry = item.status === "failed" || item.status === "processing" || item.status === "uploaded";
     tr.innerHTML = `
       <td>${formatDisplayDate(item.consultation_date)}</td>
       <td>${consultationTypeLabel(item.consultation_type)}</td>
@@ -715,10 +716,24 @@ function renderConsultations() {
       <td>
         <div class="row-actions">
           <span class="status-badge ${item.status}">${statusLabel(item.status)}</span>
+          ${canRetry ? '<button type="button" class="btn-retry">Повторить</button>' : ""}
           ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
         </div>
       </td>
     `;
+    tr.querySelector(".btn-retry")?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        const resRetry = await apiFetch(`/api/consultations/${item.id}/retry`, { method: "POST" });
+        const payload = await resRetry.json().catch(() => ({}));
+        if (!resRetry.ok) {
+          throw new Error(formatErrorMessage(payload, "Не удалось повторить обработку"));
+        }
+        fetchConsultations();
+      } catch (err) {
+        alert("Ошибка: " + formatErrorMessage(err, "Не удалось повторить обработку"));
+      }
+    });
     tr.querySelector(".btn-delete")?.addEventListener("click", async (e) => {
       e.stopPropagation();
       try {
@@ -936,7 +951,7 @@ async function initWorkspace() {
 
 async function loadRuntimeConfig() {
   try {
-    const res = await apiFetch("/health");
+    const res = await apiFetch("/health", { cache: "no-store" });
     if (!res.ok) return;
     const data = await res.json();
     const minutes = Number(data.max_audio_duration_minutes);

@@ -314,6 +314,28 @@ def export_consultation_audio(
     }
 
 
+@router.post("/{consultation_id}/retry", response_model=UploadResponse)
+def retry_consultation_processing(
+    consultation_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    row = db.get(Consultation, consultation_id)
+    if not row:
+        raise HTTPException(404, "Запись не найдена")
+    if not can_access_doctor_record(user, row.doctor_name):
+        raise HTTPException(403, "Недостаточно прав")
+    if row.status not in {"uploaded", "processing", "failed"}:
+        raise HTTPException(400, "Повторная обработка доступна только для загруженных, зависших или ошибочных записей")
+
+    row.status = "uploaded"
+    row.error_message = None
+    db.commit()
+    background_tasks.add_task(_run_pipeline, consultation_id)
+    return UploadResponse(id=consultation_id, status="processing", message="Запись отправлена на повторную обработку")
+
+
 @router.get("/{consultation_id}", response_model=ConsultationDetail)
 def get_consultation(
     consultation_id: str,

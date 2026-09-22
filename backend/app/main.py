@@ -21,7 +21,7 @@ CONSULTATION_HTML = STATIC_DIR / "consultation.html"
 
 
 def _consultation_page() -> FileResponse:
-    return FileResponse(CONSULTATION_HTML, media_type="text/html")
+    return FileResponse(CONSULTATION_HTML, media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 APP_VERSION = "1.1.0"
@@ -70,7 +70,7 @@ def health():
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+    return FileResponse(STATIC_DIR / "index.html", media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/record/{consultation_id}")

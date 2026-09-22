@@ -146,6 +146,15 @@ tbody tr:hover { background: #f5f5f5; }
   flex-shrink: 0;
 }
 .btn-delete:hover { background: #fff0f0; border-color: #b22222; }
+.btn-retry {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid #ccc;
+  background: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.btn-retry:hover { background: #f0f7ff; border-color: #0066cc; }
 .meta { margin-bottom: 1rem; font-size: 0.95rem; }
 .meta strong { display: inline-block; min-width: 5rem; }
 .tabs { margin-bottom: 0.75rem; }

@@ -58,6 +58,7 @@ async function loadDetail() {
       <div class="status-row">
         <span><strong>Статус:</strong> <span class="status-badge ${data.status}">${statusLabel(data.status)}</span></span>
         <span class="detail-actions">
+          ${data.status === "failed" || data.status === "processing" || data.status === "uploaded" ? '<button type="button" id="retry-processing-button">Повторить обработку</button>' : ""}
           ${canExportAudio ? '<button type="button" id="export-audio-button">Выгрузить аудио</button>' : ""}
           ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
         </span>
@@ -95,6 +96,25 @@ async function loadDetail() {
         exportStatus.textContent = "Ошибка выгрузки: " + formatErrorMessage(err, "Не удалось выгрузить аудио");
       } finally {
         exportAudioBtn.disabled = false;
+      }
+    };
+  }
+
+  const retryBtn = detailHeader.querySelector("#retry-processing-button");
+  if (retryBtn) {
+    retryBtn.onclick = async () => {
+      retryBtn.disabled = true;
+      try {
+        const resRetry = await apiFetch(`/api/consultations/${consultationId}/retry`, { method: "POST" });
+        const payload = await resRetry.json().catch(() => ({}));
+        if (!resRetry.ok) {
+          throw new Error(formatErrorMessage(payload, "Не удалось повторить обработку"));
+        }
+        await loadDetail();
+      } catch (err) {
+        alert("Ошибка: " + formatErrorMessage(err, "Не удалось повторить обработку"));
+      } finally {
+        retryBtn.disabled = false;
       }
     };
   }

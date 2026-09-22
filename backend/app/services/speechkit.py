@@ -66,7 +66,10 @@ def _parse_ndjson(text: str) -> list[dict]:
     idx = 0
     while idx < len(text):
         obj, end = decoder.raw_decode(text, idx)
-        objects.append(obj)
+        if isinstance(obj, list):
+            objects.extend(item for item in obj if isinstance(item, dict))
+        elif isinstance(obj, dict):
+            objects.append(obj)
         idx = end
         while idx < len(text) and text[idx] in " \n\r\t":
             idx += 1
@@ -174,14 +177,28 @@ def _parse_stt_response(payload: dict) -> list[TranscriptSegment]:
     return segments
 
 
-async def _fetch_recognition_results(client: httpx.AsyncClient, operation_id: str) -> list[dict]:
-    resp = await client.get(
-        GET_RECOGNITION_URL,
-        headers=_headers(json_body=False),
-        params={"operationId": operation_id},
-    )
-    resp.raise_for_status()
-    return _parse_ndjson(resp.text)
+async def _fetch_recognition_results(client: httpx.AsyncClient, operation_id: str) -> tuple[list[dict], str]:
+    last_text = ""
+    last_error: Exception | None = None
+    for param_name in ("operationId", "operation_id"):
+        try:
+            resp = await client.get(
+                GET_RECOGNITION_URL,
+                headers=_headers(json_body=False),
+                params={param_name: operation_id},
+            )
+            last_text = resp.text
+            resp.raise_for_status()
+            last_error = None
+            events = _parse_ndjson(resp.text)
+            if events:
+                return events, param_name
+        except Exception as exc:
+            last_error = exc
+
+    if last_error:
+        raise last_error
+    return [], last_text[:500]
 
 
 async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], str]:
@@ -226,7 +243,7 @@ async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], s
             if op_data.get("error"):
                 raise RuntimeError(str(op_data["error"]))
 
-            events = await _fetch_recognition_results(client, operation_id)
+            events, recognition_source = await _fetch_recognition_results(client, operation_id)
             segments = _parse_recognition_events(events)
 
             if not segments:
@@ -235,7 +252,7 @@ async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], s
             if not segments:
                 raise RuntimeError(
                     "SpeechKit: пустой результат распознавания. "
-                    "Проверьте getRecognition и формат ответа."
+                    f"operation_id={operation_id}, getRecognition={recognition_source or 'empty'}."
                 )
 
             lines = []
