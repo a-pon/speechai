@@ -1,4 +1,17 @@
 services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "48mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - ./volumes/redis:/data
+    restart: unless-stopped
+    mem_limit: 96m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   speechai:
     build: .
     image: speechai:local
@@ -12,6 +25,7 @@ services:
       YANDEXGPT_MODEL: "${YANDEXGPT_MODEL:-yandexgpt}"
       MAX_AUDIO_DURATION_MINUTES: "${MAX_AUDIO_DURATION_MINUTES:-90}"
       RECOVER_PENDING_ON_STARTUP: "${RECOVER_PENDING_ON_STARTUP:-false}"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
       DATABASE_URL: "sqlite:////data/speechai.db"
       AUDIO_DIR: "/data/audio"
       SESSION_SECRET: "${SESSION_SECRET:-change-me}"
@@ -25,9 +39,36 @@ services:
     volumes:
       - ./volumes/data:/data
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()\""]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 20s
+
+  speechai-worker:
+    build: .
+    image: speechai:local
+    container_name: speechai-worker
+    command: ["celery", "-A", "app.tasks:celery_app", "worker", "--loglevel=INFO", "--pool=solo", "--concurrency=1"]
+    environment:
+      MOCK_AI: "${MOCK_AI:-true}"
+      YANDEX_API_KEY: "${YANDEX_API_KEY:-}"
+      YANDEX_FOLDER_ID: "${YANDEX_FOLDER_ID:-}"
+      YANDEXGPT_MODEL: "${YANDEXGPT_MODEL:-yandexgpt}"
+      RECOVER_PENDING_ON_STARTUP: "${RECOVER_PENDING_ON_STARTUP:-false}"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      DATABASE_URL: "sqlite:////data/speechai.db"
+      AUDIO_DIR: "/data/audio"
+      SESSION_SECRET: "${SESSION_SECRET:-change-me}"
+    volumes:
+      - ./volumes/data:/data
+    depends_on:
+      speechai:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: "${WORKER_MEMORY_LIMIT:-384m}"
+    cpus: ${WORKER_CPU_LIMIT:-0.75}

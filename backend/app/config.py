@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     yandexgpt_model: str = "yandexgpt"
     max_audio_duration_minutes: int = 90
     recover_pending_on_startup: bool = False
+    celery_broker_url: str = "redis://redis:6379/0"
     remote_audio_enabled: bool = False
     remote_audio_host: str = ""
     remote_audio_port: int = 22

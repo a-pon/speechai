@@ -5,7 +5,7 @@ from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
@@ -17,6 +17,7 @@ from app.schemas import ConsultationDetail, ConsultationListItem, TranscriptSegm
 from app.services.audio_export import export_audio_file
 from app.services.audio_utils import get_duration_sec
 from app.services.pipeline import process_consultation
+from app.tasks import process_consultation_task
 
 router = APIRouter(prefix="/api/consultations", tags=["consultations"])
 CONSULTATION_TYPES = {"primary_adult", "primary_child", "repeat_adult"}
@@ -138,7 +139,6 @@ def _validate_audio_duration(audio_path: Path) -> int:
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_consultation(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     doctor_name: str = Form(""),
     patient_name: str = Form(...),
@@ -222,7 +222,7 @@ async def upload_consultation(
     db.add(consultation)
     db.commit()
 
-    background_tasks.add_task(_run_pipeline, consultation_id)
+    process_consultation_task.delay(consultation_id)
 
     return UploadResponse(
         id=consultation_id,
@@ -317,7 +317,6 @@ def export_consultation_audio(
 @router.post("/{consultation_id}/retry", response_model=UploadResponse)
 def retry_consultation_processing(
     consultation_id: str,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -331,8 +330,9 @@ def retry_consultation_processing(
 
     row.status = "uploaded"
     row.error_message = None
+    row.processing_attempts = 0
     db.commit()
-    background_tasks.add_task(_run_pipeline, consultation_id)
+    process_consultation_task.delay(consultation_id)
     return UploadResponse(id=consultation_id, status="processing", message="Запись отправлена на повторную обработку")
 
 

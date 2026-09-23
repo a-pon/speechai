@@ -1,20 +1,16 @@
 from pathlib import Path
 import os
-import threading
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
 
 from app.api.auth import router as auth_router
 from app.api.consultations import router as consultations_router
-from app.api.consultations import _run_pipeline
 from app.api.integration import router as integration_router
 from app.api.users import router as users_router
 from app.config import get_settings
-from app.db import SessionLocal, init_db
-from app.models import Consultation
+from app.db import init_db
 
 STATIC_DIR = Path(__file__).parent / "static"
 CONSULTATION_HTML = STATIC_DIR / "consultation.html"
@@ -33,26 +29,6 @@ app = FastAPI(title="SpeechAI", version=APP_VERSION)
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
-    if get_settings().recover_pending_on_startup:
-        restart_pending_consultations()
-
-
-def _run_pending_consultations(consultation_ids: list[str]) -> None:
-    for consultation_id in consultation_ids:
-        _run_pipeline(consultation_id)
-
-
-def restart_pending_consultations() -> None:
-    db = SessionLocal()
-    try:
-        consultation_ids = db.scalars(
-            select(Consultation.id).where(Consultation.status.in_(("uploaded", "processing")))
-        ).all()
-    finally:
-        db.close()
-
-    if consultation_ids:
-        threading.Thread(target=_run_pending_consultations, args=(consultation_ids,), daemon=True).start()
 
 
 @app.get("/health")
