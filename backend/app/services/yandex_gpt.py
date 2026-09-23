@@ -1,3 +1,5 @@
+import asyncio
+import random
 import re
 from pathlib import Path
 
@@ -73,8 +75,27 @@ async def evaluate_transcript(transcript: str, consultation_type: str = "primary
     }
 
     async with httpx.AsyncClient(timeout=180.0) as client:
-        response = await client.post(url, headers=headers, json=body)
-        response.raise_for_status()
+        response = None
+        for attempt in range(4):
+            try:
+                response = await client.post(url, headers=headers, json=body)
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if attempt == 3:
+                    raise RuntimeError(
+                        f"YandexGPT network request failed after retries ({type(exc).__name__})"
+                    ) from exc
+                await asyncio.sleep(min(2 ** attempt + random.random(), 8))
+                continue
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt < 3:
+                    await asyncio.sleep(min(2 ** attempt + random.random(), 8))
+                    continue
+            if response.is_error:
+                detail = response.text.strip().replace("\n", " ")[:1000]
+                raise RuntimeError(f"YandexGPT HTTP {response.status_code}: {detail or response.reason_phrase}")
+            break
+        if response is None:
+            raise RuntimeError("YandexGPT request retries exhausted")
         data = response.json()
 
     alternative = data["result"]["alternatives"][0]

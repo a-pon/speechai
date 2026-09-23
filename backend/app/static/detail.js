@@ -64,7 +64,7 @@ async function loadDetail() {
         </span>
       </div>
       ${canExportAudio ? '<div id="export-audio-status" class="status"></div>' : ""}
-      ${data.error_message ? `<div class="error-text"><strong>Ошибка:</strong> ${escapeHtml(data.error_message)}</div>` : ""}
+      ${currentUser?.role === "admin" && data.error_message ? `<div class="error-text"><strong>Ошибка:</strong> ${escapeHtml(data.error_message)}</div>` : ""}
     </div>
   `;
 

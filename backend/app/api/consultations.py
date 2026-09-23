@@ -362,7 +362,7 @@ def get_consultation(
         duration_sec=row.duration_sec,
         overall_score=row.overall_score,
         status=row.status,
-        error_message=row.error_message,
+        error_message=row.error_message if user["role"] == "admin" else None,
         evaluation_report=row.evaluation_report,
         transcript_text=row.transcript_text,
         segments=[

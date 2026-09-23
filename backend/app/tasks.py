@@ -12,7 +12,13 @@ celery_app.conf.update(
     task_ignore_result=True,
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
-    task_time_limit=1800,
+    # Redis otherwise redelivers unacknowledged tasks after its 1-hour default,
+    # while a valid audio job may run for up to 3 hours.
+    broker_transport_options={"visibility_timeout": 14400},
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_time_limit=10800,
+    task_soft_time_limit=10500,
 )
 
 

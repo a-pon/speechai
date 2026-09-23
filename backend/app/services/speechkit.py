@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import random
 from pathlib import Path
 
 import httpx
@@ -13,6 +14,29 @@ from app.services.mock_ai import mock_transcribe
 STT_URL = "https://stt.api.cloud.yandex.net/stt/v3/recognizeFileAsync"
 GET_RECOGNITION_URL = "https://stt.api.cloud.yandex.net/stt/v3/getRecognition"
 OPS_URL = "https://operation.api.cloud.yandex.net/operations"
+
+
+async def _request_with_retry(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> httpx.Response:
+    """Retry transient network and Yandex throttling/server errors; surface useful provider diagnostics."""
+    for attempt in range(4):
+        try:
+            response = await client.request(method, url, **kwargs)
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            if attempt == 3:
+                raise RuntimeError(
+                    f"Yandex SpeechKit: network request failed after retries ({type(exc).__name__})"
+                ) from exc
+            await asyncio.sleep(min(2 ** attempt + random.random(), 8))
+            continue
+        if response.status_code == 429 or response.status_code >= 500:
+            if attempt < 3:
+                await asyncio.sleep(min(2 ** attempt + random.random(), 8))
+                continue
+        if response.is_error:
+            body = response.text.strip().replace("\n", " ")[:1000]
+            raise RuntimeError(f"Yandex SpeechKit HTTP {response.status_code}: {body or response.reason_phrase}")
+        return response
+    raise RuntimeError("Yandex SpeechKit: request retries exhausted")
 
 
 def _audio_container_type(path: Path) -> str:
@@ -182,13 +206,14 @@ async def _fetch_recognition_results(client: httpx.AsyncClient, operation_id: st
     last_error: Exception | None = None
     for param_name in ("operationId", "operation_id"):
         try:
-            resp = await client.get(
+            resp = await _request_with_retry(
+                client,
+                "GET",
                 GET_RECOGNITION_URL,
                 headers=_headers(json_body=False),
                 params={param_name: operation_id},
             )
             last_text = resp.text
-            resp.raise_for_status()
             last_error = None
             events = _parse_ndjson(resp.text)
             if events:
@@ -227,16 +252,17 @@ async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], s
         body["speakerLabeling"] = {"speakerLabeling": "SPEAKER_LABELING_ENABLED"}
 
     async with httpx.AsyncClient(timeout=300.0) as client:
-        start_resp = await client.post(STT_URL, headers=_headers(), json=body)
-        start_resp.raise_for_status()
+        start_resp = await _request_with_retry(client, "POST", STT_URL, headers=_headers(), json=body)
         operation_id = start_resp.json().get("id") or start_resp.json().get("operationId")
         if not operation_id:
             raise RuntimeError(f"SpeechKit: нет operation id: {start_resp.text}")
 
-        for _ in range(120):
+        # Allow 30 minutes of service overhead beyond the 120-minute upload limit.
+        for _ in range(1800):
             await asyncio.sleep(5)
-            op_resp = await client.get(f"{OPS_URL}/{operation_id}", headers=_headers(json_body=False))
-            op_resp.raise_for_status()
+            op_resp = await _request_with_retry(
+                client, "GET", f"{OPS_URL}/{operation_id}", headers=_headers(json_body=False)
+            )
             op_data = op_resp.json()
             if not op_data.get("done"):
                 continue
@@ -250,9 +276,17 @@ async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], s
                 segments = _parse_stt_response(op_data.get("response") or op_data)
 
             if not segments:
+                event_keys = sorted(
+                    {
+                        key
+                        for event in events
+                        for key in (event.get("result", event) if isinstance(event.get("result", event), dict) else {})
+                    }
+                )
                 raise RuntimeError(
-                    "SpeechKit: пустой результат распознавания. "
-                    f"operation_id={operation_id}, getRecognition={recognition_source or 'empty'}."
+                    "SpeechKit: операция Yandex завершилась, но приложение не извлекло сегменты. "
+                    f"Типы данных getRecognition={','.join(event_keys) or recognition_source or 'empty'}, "
+                    f"operation_id={operation_id}."
                 )
 
             lines = []
@@ -261,4 +295,4 @@ async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], s
                 lines.append(f"[{label}] {s.text}")
             return segments, "\n".join(lines)
 
-        raise TimeoutError("SpeechKit: превышено время ожидания распознавания")
+        raise TimeoutError("Yandex SpeechKit: операция распознавания не завершилась за 150 минут")
