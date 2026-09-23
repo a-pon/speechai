@@ -12,3 +12,6 @@ tmp/
 volumes/
 docs/
 .github/*.local
+
+AGENTS.md
+agents.md
