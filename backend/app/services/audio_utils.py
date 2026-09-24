@@ -19,11 +19,11 @@ def get_audio_channels(path: Path) -> int | None:
     return None
 
 
-def get_duration_sec(path: Path) -> int | None:
+def get_duration_seconds(path: Path) -> float | None:
     try:
         audio = MutagenFile(path)
         if audio is not None and audio.info is not None and audio.info.length > 0:
-            return max(1, math.ceil(audio.info.length))
+            return float(audio.info.length)
     except Exception:
         pass
     # Mutagen does not read every browser WebM container; ffmpeg probes its header.
@@ -41,7 +41,7 @@ def get_duration_sec(path: Path) -> int | None:
     match = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr or "")
     if match:
         hours, minutes, seconds = match.groups()
-        return max(1, math.ceil(int(hours) * 3600 + int(minutes) * 60 + float(seconds)))
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
     # Browser WebM can have no duration header. Decode in the worker to measure it.
     if path.suffix.lower() not in {".webm", ".ogg"}:
         return None
@@ -58,4 +58,10 @@ def get_duration_sec(path: Path) -> int | None:
     if not times:
         return None
     hours, minutes, seconds = times[-1]
-    return max(1, math.ceil(int(hours) * 3600 + int(minutes) * 60 + float(seconds)))
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def get_duration_sec(path: Path) -> int | None:
+    """Whole seconds for display and storage; use the precise value for limits."""
+    duration = get_duration_seconds(path)
+    return max(1, math.ceil(duration)) if duration is not None else None

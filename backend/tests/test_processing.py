@@ -271,15 +271,32 @@ class DurablePipelineTests(unittest.TestCase):
 
     def test_upload_and_duration_limits_use_actual_file(self):
         from app.services.audio_prepare import AudioValidationError, validate_audio
-        settings = SimpleNamespace(max_audio_upload_mb=1, max_audio_duration_minutes=120)
+        settings = SimpleNamespace(mock_ai=True, max_audio_upload_mb=1,
+                                   max_audio_duration_minutes=120)
         with patch("app.services.audio_prepare.get_settings", return_value=settings), \
-             patch("app.services.audio_prepare.get_duration_sec", return_value=7201):
-            with self.assertRaises(AudioValidationError):
+             patch("app.services.audio_prepare.get_duration_seconds", return_value=7200.504):
+            self.assertEqual(validate_audio(self.audio)[1], 7201)
+        with patch("app.services.audio_prepare.get_settings", return_value=settings), \
+             patch("app.services.audio_prepare.get_duration_seconds", return_value=7201.001):
+            with self.assertRaisesRegex(AudioValidationError, "120 минут"):
                 validate_audio(self.audio)
         self.audio.write_bytes(b"x" * (1024 * 1024 + 1))
         with patch("app.services.audio_prepare.get_settings", return_value=settings):
             with self.assertRaises(AudioValidationError):
                 validate_audio(self.audio)
+
+    def test_duration_probe_keeps_fractional_seconds(self):
+        import wave
+        from app.services.audio_utils import get_duration_sec, get_duration_seconds
+
+        audio_path = self.audio.with_suffix(".wav")
+        with wave.open(str(audio_path), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(8000)
+            output.writeframes(b"\0\0" * 12000)
+        self.assertAlmostEqual(get_duration_seconds(audio_path), 1.5)
+        self.assertEqual(get_duration_sec(audio_path), 2)
 
     def test_silence_check_decodes_full_audio_and_accepts_speech_level_signal(self):
         import wave

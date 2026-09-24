@@ -1,11 +1,12 @@
 """Worker-only audio checks and conversion."""
+import math
 import subprocess
 import shutil
 import re
 from pathlib import Path
 
 from app.config import get_settings
-from app.services.audio_utils import get_duration_sec
+from app.services.audio_utils import get_duration_seconds
 
 try:
     from imageio_ffmpeg import get_ffmpeg_exe
@@ -22,6 +23,8 @@ class SilentAudioError(AudioValidationError):
 
 
 MIN_USABLE_PEAK_DBFS = -60.0
+# MediaRecorder stops on a timer, and MP3 encoders add a short trailing frame.
+MAX_DURATION_GRACE_SECONDS = 1.0
 
 
 def probe_audio_volume(path: Path) -> tuple[float, float]:
@@ -57,14 +60,14 @@ def validate_audio(path: Path) -> tuple[int, int]:
     size = path.stat().st_size
     if size <= 0 or size > settings.max_audio_upload_mb * 1024 * 1024:
         raise AudioValidationError(f"Размер аудиозаписи должен быть от 1 байта до {settings.max_audio_upload_mb} МБ")
-    duration = get_duration_sec(path)
-    if duration is None or duration <= 0:
+    duration_seconds = get_duration_seconds(path)
+    if duration_seconds is None or duration_seconds <= 0:
         raise AudioValidationError("Не удалось определить длительность аудиозаписи")
-    if duration > settings.max_audio_duration_minutes * 60:
+    if duration_seconds > settings.max_audio_duration_minutes * 60 + MAX_DURATION_GRACE_SECONDS:
         raise AudioValidationError(f"Аудиозапись не должна быть длиннее {settings.max_audio_duration_minutes} минут")
     if not getattr(settings, "mock_ai", False) and not has_usable_signal(path):
         raise SilentAudioError("Звуковой сигнал слишком тихий: проверьте исходную аудиозапись")
-    return size, duration
+    return size, max(1, math.ceil(duration_seconds))
 
 
 def prepare_audio(path: Path) -> tuple[Path, int, int]:
