@@ -10,7 +10,7 @@ backend/data/
 data/
 tmp/
 volumes/
-docs/
+/docs/
 .github/*.local
 
 AGENTS.md
