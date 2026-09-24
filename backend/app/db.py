@@ -39,6 +39,8 @@ def _migrate_sqlite() -> None:
         statements.append("ALTER TABLE consultations ADD COLUMN clinic_division VARCHAR(255) NOT NULL DEFAULT ''")
     if "processing_attempts" not in columns:
         statements.append("ALTER TABLE consultations ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0")
+    if "processing_generation" not in columns:
+        statements.append("ALTER TABLE consultations ADD COLUMN processing_generation INTEGER NOT NULL DEFAULT 0")
 
     if not statements:
         return

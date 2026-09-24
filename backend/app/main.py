@@ -20,7 +20,7 @@ def _consultation_page() -> FileResponse:
     return FileResponse(CONSULTATION_HTML, media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 APP_PORT = int(os.getenv("PORT", "8000"))
 
 app = FastAPI(title="SpeechAI", version=APP_VERSION)

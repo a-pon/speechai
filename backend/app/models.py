@@ -35,6 +35,7 @@ class Consultation(Base):
     duration_sec: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="uploaded")
     processing_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    processing_generation: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     evaluation_report: Mapped[str | None] = mapped_column(Text, nullable=True)

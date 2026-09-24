@@ -3,6 +3,7 @@ import base64
 import json
 import random
 from pathlib import Path
+from typing import AsyncIterator, Callable
 
 import httpx
 
@@ -16,11 +17,19 @@ GET_RECOGNITION_URL = "https://stt.api.cloud.yandex.net/stt/v3/getRecognition"
 OPS_URL = "https://operation.api.cloud.yandex.net/operations"
 
 
-async def _request_with_retry(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> httpx.Response:
+async def _request_with_retry(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    content_factory: Callable[[], AsyncIterator[bytes]] | None = None,
+    **kwargs,
+) -> httpx.Response:
     """Retry transient network and Yandex throttling/server errors; surface useful provider diagnostics."""
     for attempt in range(4):
         try:
-            response = await client.request(method, url, **kwargs)
+            request_kwargs = {**kwargs, "content": content_factory()} if content_factory else kwargs
+            response = await client.request(method, url, **request_kwargs)
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             if attempt == 3:
                 raise RuntimeError(
@@ -43,6 +52,22 @@ def _audio_container_type(path: Path) -> str:
     ext = path.suffix.lower()
     mapping = {".mp3": "MP3", ".wav": "WAV", ".ogg": "OGG_OPUS", ".opus": "OGG_OPUS"}
     return mapping.get(ext, "MP3")
+
+
+async def _iter_audio_request(path: Path, prefix: bytes, suffix: bytes) -> AsyncIterator[bytes]:
+    """Stream base64 JSON without keeping the entire recording in worker memory."""
+    yield prefix
+    with path.open("rb") as audio:
+        while chunk := audio.read(3 * 65536):
+            yield base64.b64encode(chunk)
+    yield suffix
+
+
+def _audio_request_parts(path: Path, metadata: dict) -> tuple[bytes, bytes, int]:
+    prefix = b'{"content":"'
+    suffix = b'",' + json.dumps(metadata, ensure_ascii=False, separators=(",", ":")).encode("utf-8")[1:]
+    encoded_size = 4 * ((path.stat().st_size + 2) // 3)
+    return prefix, suffix, len(prefix) + encoded_size + len(suffix)
 
 
 def _headers(*, json_body: bool = True) -> dict[str, str]:
@@ -105,11 +130,19 @@ def _extract_from_alternative(
     channel: int,
     order: int,
 ) -> TranscriptSegment | None:
-    text = (alt.get("text") or "").strip()
+    raw_text = alt.get("text")
+    text = raw_text.strip() if isinstance(raw_text, str) else ""
+    words = [word for word in (alt.get("words") or []) if isinstance(word, dict)]
+    if not text:
+        text = " ".join(
+            word["text"].strip() for word in words if isinstance(word.get("text"), str)
+        )
     if not text:
         return None
-    start = _ms(_get_any(alt, "startTimeMs", "start_time_ms"))
-    end = _ms(_get_any(alt, "endTimeMs", "end_time_ms"), start + 1000)
+    word_start = _ms(_get_any(words[0], "startTimeMs", "start_time_ms")) if words else 0
+    start = _ms(_get_any(alt, "startTimeMs", "start_time_ms"), word_start)
+    word_end = _ms(_get_any(words[-1], "endTimeMs", "end_time_ms"), start + 1000) if words else start + 1000
+    end = _ms(_get_any(alt, "endTimeMs", "end_time_ms"), word_end)
     role = "doctor" if channel == 0 else "patient"
     return TranscriptSegment(
         speaker_role=role,
@@ -118,6 +151,15 @@ def _extract_from_alternative(
         text=text,
         order_index=order,
     )
+
+
+def _first_segment(alternatives: list, channel: int, order: int) -> TranscriptSegment | None:
+    for alternative in alternatives:
+        if isinstance(alternative, dict):
+            segment = _extract_from_alternative(alternative, channel, order)
+            if segment:
+                return segment
+    return None
 
 
 def _parse_recognition_events(events: list[dict]) -> list[TranscriptSegment]:
@@ -135,30 +177,64 @@ def _parse_recognition_events(events: list[dict]) -> list[TranscriptSegment]:
         final = payload.get("final")
         if isinstance(final, dict):
             channel = _channel_index(_get_any(final, "channelTag", "channel_tag") or channel)
-            final_index = str(_get_any(final, "finalIndex", "final_index") or _get_any(audio_cursors, "finalIndex", "final_index") or order)
-            alts = final.get("alternatives") or []
-            if alts:
-                seg = _extract_from_alternative(alts[0], channel, order)
-                if seg:
-                    by_key[(channel, final_index)] = seg
-                    order += 1
+            final_index = str(
+                _get_any(final, "finalIndex", "final_index")
+                or _get_any(audio_cursors, "finalIndex", "final_index")
+                or order
+            )
+            seg = _first_segment(final.get("alternatives") or [], channel, order)
+            if seg:
+                by_key[(channel, final_index)] = seg
+                order += 1
 
         refinement = _get_any(payload, "finalRefinement", "final_refinement")
         if isinstance(refinement, dict):
             final_index = str(_get_any(refinement, "finalIndex", "final_index") or "0")
             normalized = _get_any(refinement, "normalizedText", "normalized_text") or {}
-            alts = normalized.get("alternatives") or []
-            if alts:
-                ch = _channel_index(_get_any(normalized, "channelTag", "channel_tag") or channel)
-                seg = _extract_from_alternative(alts[0], ch, order)
-                if seg:
-                    by_key[(ch, final_index)] = seg
+            ch = _channel_index(_get_any(normalized, "channelTag", "channel_tag") or channel)
+            seg = _first_segment(normalized.get("alternatives") or [], ch, order)
+            if seg:
+                by_key[(ch, final_index)] = seg
 
     segments = list(by_key.values())
     segments.sort(key=lambda s: (s.start_ms, s.order_index))
     for i, seg in enumerate(segments):
         seg.order_index = i
     return segments
+
+
+def _recognition_diagnostics(events: list[dict]) -> tuple[int, int, int, int, str]:
+    finals = refinements = texts = words = 0
+    status_messages = []
+    for envelope in events:
+        payload = envelope.get("result") if isinstance(envelope.get("result"), dict) else envelope
+        status = _get_any(payload, "statusCode", "status_code")
+        if isinstance(status, dict):
+            code = _get_any(status, "codeType", "code_type") or "unknown"
+            message = str(status.get("message") or "").replace("\n", " ")[:120]
+            status_messages.append(f"{code}: {message}")
+        final = payload.get("final")
+        refinement = _get_any(payload, "finalRefinement", "final_refinement")
+        if isinstance(final, dict):
+            finals += 1
+            alternatives = final.get("alternatives") or []
+        elif isinstance(refinement, dict):
+            refinements += 1
+            normalized = _get_any(refinement, "normalizedText", "normalized_text") or {}
+            alternatives = normalized.get("alternatives") or []
+        else:
+            continue
+        for alternative in alternatives:
+            if not isinstance(alternative, dict):
+                continue
+            if isinstance(alternative.get("text"), str) and alternative["text"].strip():
+                texts += 1
+            words += sum(
+                bool(word.get("text"))
+                for word in (alternative.get("words") or [])
+                if isinstance(word, dict)
+            )
+    return finals, refinements, texts, words, "; ".join(status_messages[-2:])
 
 
 def _parse_stt_response(payload: dict) -> list[TranscriptSegment]:
@@ -202,28 +278,14 @@ def _parse_stt_response(payload: dict) -> list[TranscriptSegment]:
 
 
 async def _fetch_recognition_results(client: httpx.AsyncClient, operation_id: str) -> tuple[list[dict], str]:
-    last_text = ""
-    last_error: Exception | None = None
-    for param_name in ("operationId", "operation_id"):
-        try:
-            resp = await _request_with_retry(
-                client,
-                "GET",
-                GET_RECOGNITION_URL,
-                headers=_headers(json_body=False),
-                params={param_name: operation_id},
-            )
-            last_text = resp.text
-            last_error = None
-            events = _parse_ndjson(resp.text)
-            if events:
-                return events, param_name
-        except Exception as exc:
-            last_error = exc
-
-    if last_error:
-        raise last_error
-    return [], last_text[:500]
+    resp = await _request_with_retry(
+        client,
+        "GET",
+        GET_RECOGNITION_URL,
+        headers=_headers(json_body=False),
+        params={"operationId": operation_id},
+    )
+    return _parse_ndjson(resp.text), "operationId"
 
 
 async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], str]:
@@ -234,14 +296,12 @@ async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], s
     if not settings.yandex_api_key:
         raise RuntimeError("Задайте YANDEX_API_KEY или включите MOCK_AI=true")
 
-    content_b64 = base64.b64encode(audio_path.read_bytes()).decode("ascii")
     container = _audio_container_type(audio_path)
     channels = get_audio_channels(audio_path)
     # Speaker labeling (диаризация) — только для моно. Стерео: канал 0/1 ≈ врач/пациент.
     use_speaker_labeling = channels == 1
 
-    body: dict = {
-        "content": content_b64,
+    metadata: dict = {
         "recognitionModel": {
             "model": "general",
             "audioFormat": {"containerAudio": {"containerAudioType": container}},
@@ -249,14 +309,22 @@ async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], s
         },
     }
     if use_speaker_labeling:
-        body["speakerLabeling"] = {"speakerLabeling": "SPEAKER_LABELING_ENABLED"}
+        metadata["speakerLabeling"] = {"speakerLabeling": "SPEAKER_LABELING_ENABLED"}
+
+    prefix, suffix, content_length = _audio_request_parts(audio_path, metadata)
+    headers = _headers()
+    headers["Content-Length"] = str(content_length)
 
     async with httpx.AsyncClient(timeout=300.0) as client:
-        start_resp = await _request_with_retry(client, "POST", STT_URL, headers=_headers(), json=body)
+        start_resp = await _request_with_retry(
+            client, "POST", STT_URL, headers=headers,
+            content_factory=lambda: _iter_audio_request(audio_path, prefix, suffix),
+        )
         operation_id = start_resp.json().get("id") or start_resp.json().get("operationId")
         if not operation_id:
             raise RuntimeError(f"SpeechKit: нет operation id: {start_resp.text}")
 
+        result_waits = 0
         # Allow 30 minutes of service overhead beyond the 120-minute upload limit.
         for _ in range(1800):
             await asyncio.sleep(5)
@@ -276,16 +344,19 @@ async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], s
                 segments = _parse_stt_response(op_data.get("response") or op_data)
 
             if not segments:
-                event_keys = sorted(
-                    {
-                        key
-                        for event in events
-                        for key in (event.get("result", event) if isinstance(event.get("result", event), dict) else {})
-                    }
+                result_waits += 1
+                if result_waits < 12:
+                    continue
+                finals, refinements, texts, words, status_message = _recognition_diagnostics(events)
+                reason = (
+                    "приложение не разобрало текст в ответе SpeechKit"
+                    if texts or words
+                    else "в final/finalRefinement не найден распознанный текст"
                 )
                 raise RuntimeError(
-                    "SpeechKit: операция Yandex завершилась, но приложение не извлекло сегменты. "
-                    f"Типы данных getRecognition={','.join(event_keys) or recognition_source or 'empty'}, "
+                    f"SpeechKit: {reason}. "
+                    f"final={finals}, finalRefinement={refinements}, text={texts}, words={words}, "
+                    f"statusCode={status_message or 'none'}, getRecognition={recognition_source or 'empty'}, "
                     f"operation_id={operation_id}."
                 )
 

@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import subprocess
 from datetime import date, datetime
@@ -6,21 +7,23 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import can_access_doctor_record, can_view_all_records, get_current_user
 from app.config import get_settings
-from app.db import SessionLocal, get_db
+from app.db import get_db
 from app.models import Consultation
 from app.schemas import ConsultationDetail, ConsultationListItem, TranscriptSegmentOut, UploadResponse
 from app.services.audio_export import export_audio_file
 from app.services.audio_utils import get_duration_sec
 from app.services.pipeline import process_consultation
+from app.services.processing_state import reset_for_manual_retry
 from app.tasks import process_consultation_task
 
 router = APIRouter(prefix="/api/consultations", tags=["consultations"])
 CONSULTATION_TYPES = {"primary_adult", "primary_child", "repeat_adult"}
+logger = logging.getLogger(__name__)
 
 try:
     from imageio_ffmpeg import get_ffmpeg_exe
@@ -42,14 +45,39 @@ def _parse_ddmmyyyy_to_date(value: str | None) -> date | None:
     raise HTTPException(400, "Дата должна быть в формате дд/мм/гггг")
 
 
-def _run_pipeline(consultation_id: str) -> None:
-    db = SessionLocal()
-    try:
-        import asyncio
+def _run_pipeline(consultation_id: str, generation: int) -> None:
+    import asyncio
 
-        asyncio.run(process_consultation(db, consultation_id))
-    finally:
-        db.close()
+    asyncio.run(process_consultation(consultation_id, generation))
+
+
+def _enqueue_processing(db: Session, row: Consultation, generation: int) -> bool:
+    try:
+        process_consultation_task.delay(row.id, generation)
+        return True
+    except Exception as exc:
+        logger.exception("Could not enqueue consultation id=%s generation=%s", row.id, generation)
+        db.execute(
+            update(Consultation)
+            .where(
+                Consultation.id == row.id,
+                Consultation.processing_generation == generation,
+                Consultation.status == "uploaded",
+            )
+            .values(status="failed", error_message=f"Очередь обработки: {type(exc).__name__}: {exc}")
+        )
+        db.commit()
+        return False
+
+
+def _admin_error_message(row: Consultation, role: str) -> str | None:
+    if role != "admin":
+        return None
+    if row.error_message:
+        return row.error_message
+    if row.status == "failed":
+        return f"Причина ошибки не сохранена (попыток: {row.processing_attempts}). Проверьте логи worker."
+    return None
 
 
 def _normalize_browser_audio(src_path: Path) -> Path:
@@ -222,12 +250,12 @@ async def upload_consultation(
     db.add(consultation)
     db.commit()
 
-    process_consultation_task.delay(consultation_id)
+    queued = _enqueue_processing(db, consultation, consultation.processing_generation)
 
     return UploadResponse(
         id=consultation_id,
-        status="processing",
-        message="Запись загружена, идёт обработка",
+        status="processing" if queued else "failed",
+        message="Запись загружена, идёт обработка" if queued else "Запись сохранена, но очередь обработки недоступна",
     )
 
 
@@ -328,12 +356,14 @@ def retry_consultation_processing(
     if row.status not in {"uploaded", "processing", "failed"}:
         raise HTTPException(400, "Повторная обработка доступна только для загруженных, зависших или ошибочных записей")
 
-    row.status = "uploaded"
-    row.error_message = None
-    row.processing_attempts = 0
+    generation = reset_for_manual_retry(row)
     db.commit()
-    process_consultation_task.delay(consultation_id)
-    return UploadResponse(id=consultation_id, status="processing", message="Запись отправлена на повторную обработку")
+    queued = _enqueue_processing(db, row, generation)
+    return UploadResponse(
+        id=consultation_id,
+        status="processing" if queued else "failed",
+        message="Запись отправлена на повторную обработку" if queued else "Очередь обработки недоступна",
+    )
 
 
 @router.get("/{consultation_id}", response_model=ConsultationDetail)
@@ -362,7 +392,7 @@ def get_consultation(
         duration_sec=row.duration_sec,
         overall_score=row.overall_score,
         status=row.status,
-        error_message=row.error_message if user["role"] == "admin" else None,
+        error_message=_admin_error_message(row, user["role"]),
         evaluation_report=row.evaluation_report,
         transcript_text=row.transcript_text,
         segments=[

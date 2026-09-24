@@ -1,12 +1,16 @@
+import logging
+
 from celery import Celery
 from celery.signals import worker_ready
-from sqlalchemy import select
+from sqlalchemy import update
 
 from app.config import get_settings
 from app.db import SessionLocal, init_db
 from app.models import Consultation
+from app.services.processing_state import claim_processing, recover_pending
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 celery_app = Celery("speechai", broker=settings.celery_broker_url)
 celery_app.conf.update(
     task_ignore_result=True,
@@ -23,25 +27,17 @@ celery_app.conf.update(
 
 
 @celery_app.task(name="speechai.process_consultation")
-def process_consultation_task(consultation_id: str) -> None:
+def process_consultation_task(consultation_id: str, generation: int = 0) -> None:
     db = SessionLocal()
     try:
-        row = db.get(Consultation, consultation_id)
-        if not row or row.status not in {"uploaded", "processing"}:
+        if not claim_processing(db, consultation_id, generation):
             return
-        if row.processing_attempts >= 2:
-            row.status = "failed"
-            row.error_message = "Автоматическая обработка остановлена после двух попыток. Запустите повторную обработку вручную."
-            db.commit()
-            return
-        row.processing_attempts += 1
-        db.commit()
     finally:
         db.close()
 
     from app.api.consultations import _run_pipeline
 
-    _run_pipeline(consultation_id)
+    _run_pipeline(consultation_id, generation)
 
 
 @worker_ready.connect
@@ -52,11 +48,23 @@ def recover_pending_on_worker_start(sender=None, **kwargs) -> None:
     init_db()
     db = SessionLocal()
     try:
-        consultation_ids = db.scalars(
-            select(Consultation.id).where(Consultation.status.in_(("uploaded", "processing")))
-        ).all()
+        pending = recover_pending(db)
     finally:
         db.close()
 
-    for consultation_id in consultation_ids:
-        process_consultation_task.delay(consultation_id)
+    for consultation_id, generation in pending:
+        try:
+            process_consultation_task.delay(consultation_id, generation)
+        except Exception as exc:
+            logger.exception("Could not requeue consultation id=%s generation=%s", consultation_id, generation)
+            with SessionLocal() as failed_db:
+                failed_db.execute(
+                    update(Consultation)
+                    .where(
+                        Consultation.id == consultation_id,
+                        Consultation.processing_generation == generation,
+                        Consultation.status == "uploaded",
+                    )
+                    .values(status="failed", error_message=f"Очередь обработки: {type(exc).__name__}: {exc}")
+                )
+                failed_db.commit()
