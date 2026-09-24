@@ -21,9 +21,13 @@ class SilentAudioError(AudioValidationError):
     pass
 
 
-def has_usable_signal(path: Path) -> bool:
-    """Check the full decoded recording without keeping audio samples in worker RAM."""
+MIN_USABLE_PEAK_DBFS = -60.0
+
+
+def probe_audio_volume(path: Path) -> tuple[float, float]:
+    """Return mean and peak dBFS for the full decoded recording."""
     command = [get_ffmpeg_exe() if get_ffmpeg_exe else "ffmpeg", "-hide_banner", "-nostats",
+               "-xerror", "-threads", "1",
                "-i", str(path), "-map", "0:a:0", "-af", "volumedetect", "-f", "null", "-"]
     try:
         result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -32,11 +36,18 @@ def has_usable_signal(path: Path) -> bool:
         raise AudioValidationError(f"Проверка звука: {type(exc).__name__}") from exc
     if result.returncode != 0:
         raise AudioValidationError(f"Не удалось проверить звуковой сигнал: {(result.stderr or '')[-500:]}")
-    matches = re.findall(r"max_volume:\s*(-inf|-?\d+(?:\.\d+)?)\s*dB", result.stderr or "")
-    if not matches:
+    summary = result.stderr or ""
+    mean = re.findall(r"mean_volume:\s*(-inf|-?\d+(?:\.\d+)?)\s*dB", summary)
+    peak = re.findall(r"max_volume:\s*(-inf|-?\d+(?:\.\d+)?)\s*dB", summary)
+    if not mean or not peak:
         raise AudioValidationError("Не удалось определить уровень звукового сигнала")
+    return float(mean[-1]), float(peak[-1])
+
+
+def has_usable_signal(path: Path) -> bool:
+    """Check the full decoded recording without keeping audio samples in worker RAM."""
     # A conservative floor: the confirmed silent recording peaks at -68 dBFS.
-    return float(matches[-1]) > -60.0
+    return probe_audio_volume(path)[1] > MIN_USABLE_PEAK_DBFS
 
 
 def validate_audio(path: Path) -> tuple[int, int]:

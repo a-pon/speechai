@@ -1,10 +1,12 @@
 import asyncio
 import hashlib
+import io
 import json
 import math
 import struct
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -328,6 +330,37 @@ class DurablePipelineTests(unittest.TestCase):
         self.assertEqual(self.row().status, "invalid_audio")
         self.assertEqual(self.row().error_category, "silent_audio")
         start.assert_not_awaited()
+
+    def test_failed_audio_diagnostic_is_read_only_and_lists_signal_candidates(self):
+        from app.diagnose_failed_audio import main
+
+        quiet_path = self.audio.with_name("quiet.mp3")
+        quiet_path.write_bytes(b"quiet")
+        with self.Session() as db:
+            row = db.get(Consultation, "record-1")
+            row.status = "failed"
+            row.created_at = datetime(2026, 9, 23)
+            db.add(Consultation(
+                id="quiet-1", consultation_date=date(2026, 9, 24),
+                doctor_name="Врач", patient_name="Пациент", audio_path=str(quiet_path),
+                original_filename="quiet.mp3", status="failed",
+                created_at=datetime(2026, 9, 24),
+            ))
+            db.commit()
+        output = io.StringIO()
+        def volume(path):
+            return (-82.5, -68.0) if path == quiet_path else (-24.0, -3.0)
+        with patch("app.diagnose_failed_audio.SessionLocal", self.Session), \
+             patch("app.diagnose_failed_audio.os.nice"), \
+             patch("app.diagnose_failed_audio.probe_audio_volume", side_effect=volume), \
+             patch("sys.argv", ["diagnose_failed_audio", "--limit", "2"]), \
+             redirect_stdout(output):
+            main()
+        report = output.getvalue()
+        self.assertIn("sound=near_silent", report)
+        self.assertIn("sound=has_signal", report)
+        self.assertIn("candidate_ids=record-1", report)
+        self.assertEqual(self.row().status, "failed")
 
     def test_manual_retry_invalidates_old_generation(self):
         with self.Session() as db:
