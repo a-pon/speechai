@@ -323,6 +323,72 @@ class DurablePipelineTests(unittest.TestCase):
         with patch("app.services.audio_prepare.get_settings", return_value=settings):
             self.assertEqual(validate_audio(audio_path)[1], 1)
 
+    def test_signal_probe_measures_long_silence(self):
+        import wave
+        from app.services.audio_prepare import probe_audio_signal
+
+        audio_path = self.audio.with_suffix(".wav")
+        tone = (int(9000 * math.sin(2 * math.pi * 440 * i / 8000)) for i in range(16000))
+        with wave.open(str(audio_path), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(8000)
+            output.writeframes(b"".join(struct.pack("<h", value) for value in tone) + b"\0\0" * 96000)
+        profile = probe_audio_signal(audio_path)
+        self.assertGreater(profile.peak_dbfs, -60)
+        self.assertAlmostEqual(profile.long_silence_sec, 12, delta=0.1)
+        self.assertAlmostEqual(profile.longest_silence_sec, 12, delta=0.1)
+
+    def test_empty_and_interrupted_long_recordings_are_not_submitted(self):
+        from app.services.audio_prepare import (AudioSignalProfile, InterruptedAudioError,
+                                                SilentAudioError, check_usable_audio)
+
+        examples = (
+            (7200.504, 7198, 4436, SilentAudioError),
+            (7091.376, 6967, 5450, InterruptedAudioError),
+            (6897, 4061, 3595, InterruptedAudioError),
+        )
+        for duration, silent, longest, error_type in examples:
+            with self.subTest(duration=duration), \
+                 patch("app.services.audio_prepare.probe_audio_signal", return_value=
+                       AudioSignalProfile(-41, 0, silent, longest)):
+                with self.assertRaises(error_type):
+                    check_usable_audio(self.audio, duration)
+        with patch("app.services.audio_prepare.probe_audio_signal", return_value=
+                   AudioSignalProfile(-22.4, 0, 0, 0)):
+            check_usable_audio(self.audio, 4071)
+
+    def test_interrupted_audio_has_visible_status_and_no_auto_retry(self):
+        from app.services.audio_prepare import InterruptedAudioError
+
+        with patch("app.services.pipeline.SessionLocal", self.Session):
+            delay = record_failure("record-1", 0, InterruptedAudioError("Большая часть без звука"))
+        self.assertIsNone(delay)
+        self.assertEqual(self.row().status, "partial_audio")
+        self.assertEqual(self.row().error_category, "interrupted_audio")
+
+    def test_bad_conversion_keeps_source_and_target_for_diagnosis(self):
+        from app.services.audio_prepare import InterruptedAudioError, prepare_audio
+
+        source = self.audio.with_suffix(".webm")
+        target = source.with_suffix(".mp3")
+        source.write_bytes(b"source")
+        target.unlink()
+
+        def convert(*_args, **_kwargs):
+            target.write_bytes(b"converted")
+            return SimpleNamespace(returncode=0, stderr="")
+
+        with patch("app.services.audio_prepare.validate_audio", side_effect=[
+                 (6, 120), InterruptedAudioError("Нет звука после перекодирования")]), \
+             patch("app.services.audio_prepare.shutil.disk_usage",
+                   return_value=SimpleNamespace(free=1024 * 1024 * 1024)), \
+             patch("app.services.audio_prepare.subprocess.run", side_effect=convert):
+            with self.assertRaises(InterruptedAudioError):
+                prepare_audio(source)
+        self.assertTrue(source.exists())
+        self.assertTrue(target.exists())
+
     def test_empty_result_from_silent_record_is_not_retried(self):
         from app.services.audio_prepare import SilentAudioError
 
@@ -339,7 +405,7 @@ class DurablePipelineTests(unittest.TestCase):
              patch("app.services.pipeline.get_settings", return_value=settings), \
              patch("app.services.pipeline.poll_recognition", new_callable=AsyncMock,
                    return_value=(True, None)), \
-             patch("app.services.pipeline.has_usable_signal", return_value=False), \
+             patch("app.services.pipeline.check_usable_audio", side_effect=SilentAudioError("Нет звука")), \
              patch("app.services.pipeline.start_recognition", new_callable=AsyncMock) as start:
             with self.assertRaises(SilentAudioError) as failure:
                 asyncio.run(process_step("record-1", 0))
@@ -350,6 +416,7 @@ class DurablePipelineTests(unittest.TestCase):
 
     def test_failed_audio_diagnostic_is_read_only_and_lists_signal_candidates(self):
         from app.diagnose_failed_audio import main
+        from app.services.audio_prepare import AudioSignalProfile
 
         quiet_path = self.audio.with_name("quiet.mp3")
         quiet_path.write_bytes(b"quiet")
@@ -365,11 +432,13 @@ class DurablePipelineTests(unittest.TestCase):
             ))
             db.commit()
         output = io.StringIO()
-        def volume(path):
-            return (-82.5, -68.0) if path == quiet_path else (-24.0, -3.0)
+        def profile(path):
+            return (AudioSignalProfile(-82.5, -68.0, 0, 0) if path == quiet_path
+                    else AudioSignalProfile(-24.0, -3.0, 0, 0))
         with patch("app.diagnose_failed_audio.SessionLocal", self.Session), \
              patch("app.diagnose_failed_audio.os.nice"), \
-             patch("app.diagnose_failed_audio.probe_audio_volume", side_effect=volume), \
+             patch("app.diagnose_failed_audio.get_duration_seconds", return_value=3600), \
+             patch("app.diagnose_failed_audio.probe_audio_signal", side_effect=profile), \
              patch("sys.argv", ["diagnose_failed_audio", "--limit", "2"]), \
              redirect_stdout(output):
             main()
@@ -425,23 +494,40 @@ class DurablePipelineTests(unittest.TestCase):
             row = db.get(Consultation, "record-1")
             row.status = "failed"
             for record_id, status in (("ready-1", "ready"), ("uploaded-1", "uploaded"),
-                                      ("uncertain-1", "failed"), ("silent-1", "invalid_audio")):
+                                      ("uncertain-1", "failed"), ("silent-1", "invalid_audio"),
+                                      ("partial-1", "partial_audio")):
                 db.add(Consultation(
                     id=record_id, consultation_date=date(2026, 9, 24), doctor_name="Врач",
                     patient_name="Пациент", audio_path=str(self.audio), original_filename="audio.mp3",
                     status=status, processing_stage="submitting" if record_id == "uncertain-1" else "prepare",
                 ))
             db.commit()
-            with patch("app.api.consultations._enqueue_processing", return_value=True) as enqueue:
+            with patch("app.api.consultations.BULK_RETRY_ENABLED", True), \
+                 patch("app.api.consultations._enqueue_processing", return_value=True) as enqueue:
                 result = retry_all_failed_consultations(db=db, user={"role": "admin"})
             self.assertEqual((result.selected, result.queued, result.skipped_uncertain), (2, 2, 1))
             self.assertEqual(enqueue.call_count, 2)
             self.assertEqual(db.get(Consultation, "ready-1").status, "ready")
             self.assertEqual(db.get(Consultation, "silent-1").processing_generation, 0)
+            self.assertEqual(db.get(Consultation, "partial-1").processing_generation, 0)
             self.assertEqual(db.get(Consultation, "uncertain-1").processing_generation, 0)
             with self.assertRaises(HTTPException) as denied:
                 retry_all_failed_consultations(db=db, user={"role": "doctor"})
             self.assertEqual(denied.exception.status_code, 403)
+
+    def test_bulk_retry_is_paused_even_for_admin(self):
+        from app.api.consultations import retry_all_failed_consultations
+
+        with self.Session() as db:
+            row = db.get(Consultation, "record-1")
+            row.status = "failed"
+            db.commit()
+            with patch("app.api.consultations._enqueue_processing") as enqueue:
+                with self.assertRaises(HTTPException) as denied:
+                    retry_all_failed_consultations(db=db, user={"role": "admin"})
+            self.assertEqual(denied.exception.status_code, 409)
+            enqueue.assert_not_called()
+            self.assertEqual(db.get(Consultation, "record-1").status, "failed")
 
     def test_remote_service_controls_are_admin_only(self):
         from app.api.consultations import export_consultation_audio, get_consultation

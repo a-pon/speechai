@@ -19,6 +19,7 @@ function statusLabel(status) {
     ready: "готово",
     failed: "ошибка",
     invalid_audio: "звук не обнаружен",
+    partial_audio: "часть записи без звука",
   };
   return map[status] || status;
 }

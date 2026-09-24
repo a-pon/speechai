@@ -65,6 +65,7 @@ async function loadDetail() {
         </span>
       </div>
       ${data.status === "invalid_audio" ? '<div class="hint">Запись почти без звука. Проверьте микрофон или источник файла и загрузите запись со слышимой речью.</div>' : ""}
+      ${data.status === "partial_audio" ? '<div class="hint">В записи большой участок без звука. Проверьте микрофон: оценка по неполной записи не выполнялась.</div>' : ""}
       ${isAdmin ? '<div id="remote-audio-status" class="status"></div>' : ""}
       ${isAdmin && data.remote_export_status === "exporting" ? '<div>Аудио выгружается…</div>' : ""}
       ${isAdmin && ["pending", "restoring"].includes(data.remote_restore_status) ? '<div>Аудио восстанавливается…</div>' : ""}

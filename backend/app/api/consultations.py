@@ -19,6 +19,7 @@ from app.tasks import _enqueue_remote, export_audio_task, process_consultation_t
 
 router = APIRouter(prefix="/api/consultations", tags=["consultations"])
 CONSULTATION_TYPES = {"primary_adult", "primary_child", "repeat_adult"}
+BULK_RETRY_ENABLED = False  # Re-enable only after the server checks are complete.
 logger = logging.getLogger(__name__)
 
 def _parse_ddmmyyyy_to_date(value: str | None) -> date | None:
@@ -359,6 +360,8 @@ def retry_all_failed_consultations(
 ):
     if user["role"] != "admin":
         raise HTTPException(403, "Только для администратора")
+    if not BULK_RETRY_ENABLED:
+        raise HTTPException(409, "Массовая повторная обработка временно отключена")
     rows = db.scalars(select(Consultation).where(
         Consultation.status.in_(("failed", "uploaded"))
     ).order_by(Consultation.created_at.asc())).all()

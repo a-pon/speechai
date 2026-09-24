@@ -897,7 +897,8 @@ async function initWorkspace() {
   if (!currentUser) return;
   loginSection.hidden = true;
   mainTabs.hidden = false;
-  retryAllButton.hidden = currentUser.role !== "admin";
+  retryAllButton.hidden = true;
+  retryAllButton.disabled = true;
   mainTabs.querySelectorAll(".admin-only").forEach((node) => {
     node.hidden = currentUser.role !== "admin";
   });
@@ -983,6 +984,7 @@ initPage().catch((err) => {
 });
 
 retryAllButton?.addEventListener("click", async () => {
+  if (retryAllButton.disabled) return;
   if (!confirm("Повторно запустить все записи со статусом «ошибка» или «загружена»? Готовые записи не изменятся.")) return;
   retryAllButton.disabled = true;
   retryAllStatus.textContent = "Добавляем записи в очередь…";
@@ -995,6 +997,6 @@ retryAllButton?.addEventListener("click", async () => {
   } catch (error) {
     retryAllStatus.textContent = "Ошибка: " + formatErrorMessage(error, "Не удалось запустить обработку");
   } finally {
-    retryAllButton.disabled = false;
+    retryAllButton.disabled = true;
   }
 });

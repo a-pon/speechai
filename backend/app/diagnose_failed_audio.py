@@ -8,7 +8,8 @@ from sqlalchemy import func, select
 
 from app.db import SessionLocal
 from app.models import Consultation
-from app.services.audio_prepare import AudioValidationError, MIN_USABLE_PEAK_DBFS, probe_audio_volume
+from app.services.audio_prepare import AudioValidationError, classify_audio_signal, probe_audio_signal
+from app.services.audio_utils import get_duration_seconds
 
 
 def main() -> None:
@@ -46,13 +47,20 @@ def main() -> None:
             continue
         try:
             size = path.stat().st_size
-            mean_dbfs, peak_dbfs = probe_audio_volume(path)
+            duration = get_duration_seconds(path)
+            if duration is None or duration <= 0:
+                raise AudioValidationError("Не удалось определить длительность")
+            profile = probe_audio_signal(path)
         except (AudioValidationError, OSError):
             print(f"result id={row.id} sound=probe_error", flush=True)
             continue
-        sound = "has_signal" if peak_dbfs > MIN_USABLE_PEAK_DBFS else "near_silent"
+        category = classify_audio_signal(profile, duration)
+        sound = {"silent_audio": "near_silent", "interrupted_audio": "interrupted"}.get(
+            category, "has_signal")
         print(f"result id={row.id} sound={sound} bytes={size} "
-              f"mean_dbfs={mean_dbfs:.1f} peak_dbfs={peak_dbfs:.1f}", flush=True)
+              f"mean_dbfs={profile.mean_dbfs:.1f} peak_dbfs={profile.peak_dbfs:.1f} "
+              f"silence_sec={profile.long_silence_sec:.0f} "
+              f"longest_silence_sec={profile.longest_silence_sec:.0f}", flush=True)
         if sound == "has_signal":
             candidates.append(row.id)
 
