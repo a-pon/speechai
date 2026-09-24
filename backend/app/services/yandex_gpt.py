@@ -1,7 +1,6 @@
 import asyncio
 import random
 import re
-from pathlib import Path
 
 import httpx
 
@@ -106,3 +105,62 @@ async def evaluate_transcript(transcript: str, consultation_type: str = "primary
             "Нужна настройка правил модерации/инстанса в AI Studio или повторная обработка с другим YandexGPT-инстансом."
         )
     return report, _parse_overall_score(report)
+
+
+def split_transcript(transcript: str, max_chars: int = 9000) -> list[str]:
+    """Split on dialogue lines so each model request stays bounded."""
+    chunks: list[str] = []
+    current = ""
+    for line in transcript.splitlines():
+        if len(current) + len(line) + 1 > max_chars and current:
+            chunks.append(current)
+            current = ""
+        while len(line) > max_chars:
+            chunks.append(line[:max_chars])
+            line = line[max_chars:]
+        current += line + "\n"
+    if current:
+        chunks.append(current)
+    return chunks or [transcript]
+
+
+async def summarize_transcript_chunk(chunk: str, index: int, total: int) -> str:
+    settings = get_settings()
+    if settings.mock_ai:
+        return f"Часть {index + 1}/{total}: {chunk[:1500]}"
+    if not settings.yandex_api_key or not settings.yandex_folder_id:
+        raise RuntimeError("Задайте YANDEX_API_KEY и YANDEX_FOLDER_ID")
+    body = {
+        "modelUri": f"gpt://{settings.yandex_folder_id}/{settings.yandexgpt_model}",
+        "completionOptions": {"stream": False, "temperature": 0.1, "maxTokens": 1400},
+        "messages": [
+            {"role": "system", "text": (
+                "Извлеки только наблюдаемые факты и короткие дословные цитаты для оценки врача "
+                "по этапам: контакт, анамнез, диагностика, презентация лечения, возражения, завершение. "
+                "Для отсутствующих этапов напиши 'нет данных'. Не выставляй баллы и не додумывай факты. "
+                "Ответ до 1600 символов."
+            )},
+            {"role": "user", "text": f"Часть {index + 1} из {total}:\n{chunk}"},
+        ],
+    }
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        response = await client.post(
+            "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
+            headers={"Authorization": f"Api-Key {settings.yandex_api_key}"}, json=body,
+        )
+        response.raise_for_status()
+        data = response.json()
+    alternative = data["result"]["alternatives"][0]
+    summary = alternative["message"]["text"]
+    if _is_moderation_refusal(data, alternative, summary):
+        raise RuntimeError("YandexGPT: фрагмент отклонён модерацией")
+    return summary[:1800]
+
+
+async def evaluate_from_summaries(summaries: list[str], consultation_type: str) -> tuple[str, float | None]:
+    evidence = "\n\n".join(f"Часть {i + 1}: {summary}" for i, summary in enumerate(summaries))
+    return await evaluate_transcript(
+        "Сжатые факты по последовательным частям консультации. Отсутствие этапа в отдельной части "
+        "не означает отсутствия этапа во всём разговоре. Цитируй только приведённые дословные фразы.\n\n"
+        + evidence, consultation_type,
+    )

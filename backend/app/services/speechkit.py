@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import random
 from pathlib import Path
@@ -10,7 +9,6 @@ import httpx
 from app.config import get_settings
 from app.models import TranscriptSegment
 from app.services.audio_utils import get_audio_channels
-from app.services.mock_ai import mock_transcribe
 
 STT_URL = "https://stt.api.cloud.yandex.net/stt/v3/recognizeFileAsync"
 GET_RECOGNITION_URL = "https://stt.api.cloud.yandex.net/stt/v3/getRecognition"
@@ -54,27 +52,9 @@ def _audio_container_type(path: Path) -> str:
     return mapping.get(ext, "MP3")
 
 
-async def _iter_audio_request(path: Path, prefix: bytes, suffix: bytes) -> AsyncIterator[bytes]:
-    """Stream base64 JSON without keeping the entire recording in worker memory."""
-    yield prefix
-    with path.open("rb") as audio:
-        while chunk := audio.read(3 * 65536):
-            yield base64.b64encode(chunk)
-    yield suffix
-
-
-def _audio_request_parts(path: Path, metadata: dict) -> tuple[bytes, bytes, int]:
-    prefix = b'{"content":"'
-    suffix = b'",' + json.dumps(metadata, ensure_ascii=False, separators=(",", ":")).encode("utf-8")[1:]
-    encoded_size = 4 * ((path.stat().st_size + 2) // 3)
-    return prefix, suffix, len(prefix) + encoded_size + len(suffix)
-
-
 def _headers(*, json_body: bool = True) -> dict[str, str]:
     settings = get_settings()
     headers = {"Authorization": f"Api-Key {settings.yandex_api_key}"}
-    if settings.yandex_folder_id:
-        headers["x-folder-id"] = settings.yandex_folder_id
     if json_body:
         headers["Content-Type"] = "application/json"
     return headers
@@ -162,16 +142,15 @@ def _first_segment(alternatives: list, channel: int, order: int) -> TranscriptSe
     return None
 
 
-def _parse_recognition_events(events: list[dict]) -> list[TranscriptSegment]:
-    """Собирает сегменты из потока getRecognition (final / finalRefinement)."""
+class RecognitionCollector:
+    def __init__(self) -> None:
+        self.by_key: dict[tuple[int, str], TranscriptSegment] = {}
+        self.order = 0
 
-    by_key: dict[tuple[int, str], TranscriptSegment] = {}
-    order = 0
-
-    for envelope in events:
+    def add(self, envelope: dict) -> None:
         payload = envelope.get("result") if isinstance(envelope.get("result"), dict) else envelope
         if not isinstance(payload, dict):
-            continue
+            return
         channel = _channel_index(_get_any(payload, "channelTag", "channel_tag"))
         audio_cursors = _get_any(payload, "audioCursors", "audio_cursors") or {}
         final = payload.get("final")
@@ -180,27 +159,71 @@ def _parse_recognition_events(events: list[dict]) -> list[TranscriptSegment]:
             final_index = str(
                 _get_any(final, "finalIndex", "final_index")
                 or _get_any(audio_cursors, "finalIndex", "final_index")
-                or order
+                or self.order
             )
-            seg = _first_segment(final.get("alternatives") or [], channel, order)
+            seg = _first_segment(final.get("alternatives") or [], channel, self.order)
             if seg:
-                by_key[(channel, final_index)] = seg
-                order += 1
-
+                self.by_key[(channel, final_index)] = seg
+                self.order += 1
         refinement = _get_any(payload, "finalRefinement", "final_refinement")
         if isinstance(refinement, dict):
             final_index = str(_get_any(refinement, "finalIndex", "final_index") or "0")
             normalized = _get_any(refinement, "normalizedText", "normalized_text") or {}
             ch = _channel_index(_get_any(normalized, "channelTag", "channel_tag") or channel)
-            seg = _first_segment(normalized.get("alternatives") or [], ch, order)
+            seg = _first_segment(normalized.get("alternatives") or [], ch, self.order)
             if seg:
-                by_key[(ch, final_index)] = seg
+                self.by_key[(ch, final_index)] = seg
 
-    segments = list(by_key.values())
-    segments.sort(key=lambda s: (s.start_ms, s.order_index))
-    for i, seg in enumerate(segments):
-        seg.order_index = i
-    return segments
+    def segments(self) -> list[TranscriptSegment]:
+        segments = list(self.by_key.values())
+        segments.sort(key=lambda item: (item.start_ms, item.order_index))
+        for index, segment in enumerate(segments):
+            segment.order_index = index
+        return segments
+
+
+def _parse_recognition_events(events: list[dict]) -> list[TranscriptSegment]:
+    collector = RecognitionCollector()
+    for event in events:
+        collector.add(event)
+    return collector.segments()
+
+
+async def _iter_recognition_events(client: httpx.AsyncClient, operation_id: str) -> AsyncIterator[dict]:
+    """Parse a concatenated JSON/NDJSON response without materializing the full body."""
+    import codecs
+
+    decoder = json.JSONDecoder()
+    utf8 = codecs.getincrementaldecoder("utf-8")()
+    buffer = ""
+    async with client.stream("GET", GET_RECOGNITION_URL,
+                             headers=_headers(json_body=False),
+                             params={"operationId": operation_id}) as response:
+        if response.is_error:
+            body = (await response.aread()).decode("utf-8", errors="replace")[:1000]
+            raise RuntimeError(f"Yandex SpeechKit HTTP {response.status_code}: {body}")
+        async for chunk in response.aiter_bytes(65536):
+            buffer += utf8.decode(chunk)
+            while True:
+                buffer = buffer.lstrip()
+                if not buffer:
+                    break
+                try:
+                    obj, end = decoder.raw_decode(buffer)
+                except json.JSONDecodeError:
+                    if len(buffer) > 8 * 1024 * 1024:
+                        raise RuntimeError("SpeechKit: слишком большой или некорректный JSON-объект результата")
+                    break
+                buffer = buffer[end:]
+                if isinstance(obj, dict):
+                    yield obj
+                elif isinstance(obj, list):
+                    for item in obj:
+                        if isinstance(item, dict):
+                            yield item
+    buffer += utf8.decode(b"", final=True)
+    if buffer.strip():
+        raise RuntimeError("SpeechKit: неполный JSON в результате распознавания")
 
 
 def _recognition_diagnostics(events: list[dict]) -> tuple[int, int, int, int, str]:
@@ -288,82 +311,55 @@ async def _fetch_recognition_results(client: httpx.AsyncClient, operation_id: st
     return _parse_ndjson(resp.text), "operationId"
 
 
-async def transcribe_audio(audio_path: Path) -> tuple[list[TranscriptSegment], str]:
+async def start_recognition(audio_uri: str, audio_path: Path) -> str:
+    """Submit a private Object Storage URI and return the durable operation ID."""
     settings = get_settings()
-    if settings.mock_ai:
-        return mock_transcribe(audio_path)
-
     if not settings.yandex_api_key:
-        raise RuntimeError("Задайте YANDEX_API_KEY или включите MOCK_AI=true")
-
-    container = _audio_container_type(audio_path)
-    channels = get_audio_channels(audio_path)
-    # Speaker labeling (диаризация) — только для моно. Стерео: канал 0/1 ≈ врач/пациент.
-    use_speaker_labeling = channels == 1
-
-    metadata: dict = {
+        raise RuntimeError("Задайте YANDEX_API_KEY")
+    metadata = {
+        "uri": audio_uri,
         "recognitionModel": {
             "model": "general",
-            "audioFormat": {"containerAudio": {"containerAudioType": container}},
+            "audioFormat": {"containerAudio": {"containerAudioType": _audio_container_type(audio_path)}},
             "audioProcessingType": "FULL_DATA",
         },
     }
-    if use_speaker_labeling:
+    if get_audio_channels(audio_path) == 1:
         metadata["speakerLabeling"] = {"speakerLabeling": "SPEAKER_LABELING_ENABLED"}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # POST is not idempotent: a lost response may already contain an accepted operation.
+        response = await client.post(STT_URL, headers=_headers(), json=metadata)
+    if response.is_error:
+        body = response.text.strip().replace("\n", " ")[:1000]
+        raise RuntimeError(f"SpeechKit HTTP {response.status_code}: {body or response.reason_phrase}")
+    operation_id = response.json().get("id") or response.json().get("operationId")
+    if not operation_id:
+        raise RuntimeError("SpeechKit не вернул ID операции")
+    return operation_id
 
-    prefix, suffix, content_length = _audio_request_parts(audio_path, metadata)
-    headers = _headers()
-    headers["Content-Length"] = str(content_length)
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        start_resp = await _request_with_retry(
-            client, "POST", STT_URL, headers=headers,
-            content_factory=lambda: _iter_audio_request(audio_path, prefix, suffix),
+async def poll_recognition(operation_id: str) -> tuple[bool, list[TranscriptSegment] | None]:
+    """One short poll. Completed operations may need several result reads."""
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        response = await _request_with_retry(
+            client, "GET", f"{OPS_URL}/{operation_id}", headers=_headers(json_body=False)
         )
-        operation_id = start_resp.json().get("id") or start_resp.json().get("operationId")
-        if not operation_id:
-            raise RuntimeError(f"SpeechKit: нет operation id: {start_resp.text}")
+        operation = response.json()
+        if not operation.get("done"):
+            return False, None
+        if operation.get("error"):
+            raise RuntimeError(f"SpeechKit operation {operation_id}: {operation['error']}")
+        collector = RecognitionCollector()
+        async for event in _iter_recognition_events(client, operation_id):
+            collector.add(event)
+        segments = collector.segments()
+        if not segments:
+            segments = _parse_stt_response(operation.get("response") or operation)
+        return True, segments or None
 
-        result_waits = 0
-        # Allow 30 minutes of service overhead beyond the 120-minute upload limit.
-        for _ in range(1800):
-            await asyncio.sleep(5)
-            op_resp = await _request_with_retry(
-                client, "GET", f"{OPS_URL}/{operation_id}", headers=_headers(json_body=False)
-            )
-            op_data = op_resp.json()
-            if not op_data.get("done"):
-                continue
-            if op_data.get("error"):
-                raise RuntimeError(str(op_data["error"]))
 
-            events, recognition_source = await _fetch_recognition_results(client, operation_id)
-            segments = _parse_recognition_events(events)
-
-            if not segments:
-                segments = _parse_stt_response(op_data.get("response") or op_data)
-
-            if not segments:
-                result_waits += 1
-                if result_waits < 12:
-                    continue
-                finals, refinements, texts, words, status_message = _recognition_diagnostics(events)
-                reason = (
-                    "приложение не разобрало текст в ответе SpeechKit"
-                    if texts or words
-                    else "в final/finalRefinement не найден распознанный текст"
-                )
-                raise RuntimeError(
-                    f"SpeechKit: {reason}. "
-                    f"final={finals}, finalRefinement={refinements}, text={texts}, words={words}, "
-                    f"statusCode={status_message or 'none'}, getRecognition={recognition_source or 'empty'}, "
-                    f"operation_id={operation_id}."
-                )
-
-            lines = []
-            for s in segments:
-                label = "Врач" if s.speaker_role == "doctor" else "Пациент"
-                lines.append(f"[{label}] {s.text}")
-            return segments, "\n".join(lines)
-
-        raise TimeoutError("Yandex SpeechKit: операция распознавания не завершилась за 150 минут")
+def format_transcript(segments: list[TranscriptSegment]) -> str:
+    return "\n".join(
+        f"[{'Врач' if segment.speaker_role == 'doctor' else 'Пациент'}] {segment.text}"
+        for segment in segments
+    )

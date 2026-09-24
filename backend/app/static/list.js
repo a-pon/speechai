@@ -21,6 +21,8 @@ const userCreateStatus = document.getElementById("user-create-status");
 const recordFilters = document.getElementById("record-filters");
 const listTable = document.getElementById("list-table");
 const listBody = document.querySelector("#list-table tbody");
+const retryAllButton = document.getElementById("retry-all-button");
+const retryAllStatus = document.getElementById("retry-all-status");
 const doctorNameInput = uploadForm.querySelector('[name="doctor_name"]');
 const consultationDateInput = uploadForm.querySelector('[name="consultation_date"]');
 const consultationTypeInput = uploadForm.querySelector('[name="consultation_type"]');
@@ -704,7 +706,6 @@ function renderConsultations() {
   items.forEach((item) => {
     const tr = document.createElement("tr");
     const canDelete = currentUser && (canViewAllRecords(currentUser) || currentUser.doctor_name === item.doctor_name);
-    const canRetry = item.status === "failed" || item.status === "processing" || item.status === "uploaded";
     tr.innerHTML = `
       <td>${formatDisplayDate(item.consultation_date)}</td>
       <td>${consultationTypeLabel(item.consultation_type)}</td>
@@ -716,24 +717,10 @@ function renderConsultations() {
       <td>
         <div class="row-actions">
           <span class="status-badge ${item.status}">${statusLabel(item.status)}</span>
-          ${canRetry ? '<button type="button" class="btn-retry">Повторить</button>' : ""}
           ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
         </div>
       </td>
     `;
-    tr.querySelector(".btn-retry")?.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      try {
-        const resRetry = await apiFetch(`/api/consultations/${item.id}/retry`, { method: "POST" });
-        const payload = await resRetry.json().catch(() => ({}));
-        if (!resRetry.ok) {
-          throw new Error(formatErrorMessage(payload, "Не удалось повторить обработку"));
-        }
-        fetchConsultations();
-      } catch (err) {
-        alert("Ошибка: " + formatErrorMessage(err, "Не удалось повторить обработку"));
-      }
-    });
     tr.querySelector(".btn-delete")?.addEventListener("click", async (e) => {
       e.stopPropagation();
       try {
@@ -910,6 +897,7 @@ async function initWorkspace() {
   if (!currentUser) return;
   loginSection.hidden = true;
   mainTabs.hidden = false;
+  retryAllButton.hidden = currentUser.role !== "admin";
   mainTabs.querySelectorAll(".admin-only").forEach((node) => {
     node.hidden = currentUser.role !== "admin";
   });
@@ -992,4 +980,21 @@ async function initPage() {
 
 initPage().catch((err) => {
   loginStatus.textContent = "Ошибка: " + err.message;
+});
+
+retryAllButton?.addEventListener("click", async () => {
+  if (!confirm("Повторно запустить все записи со статусом «ошибка» или «загружена»? Готовые записи не изменятся.")) return;
+  retryAllButton.disabled = true;
+  retryAllStatus.textContent = "Добавляем записи в очередь…";
+  try {
+    const response = await apiFetch("/api/consultations/retry-all", { method: "POST" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(formatErrorMessage(data, "Не удалось запустить обработку"));
+    retryAllStatus.textContent = `Выбрано: ${data.selected}. В очереди: ${data.queued}. Ожидают восстановления очереди: ${data.waiting_for_queue}. Требуют проверки ID SpeechKit: ${data.skipped_uncertain}.`;
+    await fetchConsultations();
+  } catch (error) {
+    retryAllStatus.textContent = "Ошибка: " + formatErrorMessage(error, "Не удалось запустить обработку");
+  } finally {
+    retryAllButton.disabled = false;
+  }
 });

@@ -37,11 +37,27 @@ class ConsultationDetail(BaseModel):
     overall_score: float | None
     status: str
     error_message: str | None
+    processing_stage: str | None = None
+    speechkit_operation_id: str | None = None
+    retry_available: bool = False
+    export_available: bool = False
+    restore_available: bool = False
+    remote_export_status: str | None = None
+    remote_export_error: str | None = None
+    remote_restore_status: str | None = None
+    remote_restore_error: str | None = None
     evaluation_report: str | None
     transcript_text: str | None
     segments: list[TranscriptSegmentOut] = Field(default_factory=list)
     created_at: datetime
     processed_at: datetime | None
+
+
+class BulkRetryResponse(BaseModel):
+    selected: int
+    queued: int
+    waiting_for_queue: int
+    skipped_uncertain: int
 
 
 class UploadResponse(BaseModel):

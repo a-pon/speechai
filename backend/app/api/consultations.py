@@ -1,7 +1,5 @@
-import json
 import logging
 import shutil
-import subprocess
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -14,22 +12,14 @@ from app.auth import can_access_doctor_record, can_view_all_records, get_current
 from app.config import get_settings
 from app.db import get_db
 from app.models import Consultation
-from app.schemas import ConsultationDetail, ConsultationListItem, TranscriptSegmentOut, UploadResponse
-from app.services.audio_export import export_audio_file
-from app.services.audio_utils import get_duration_sec
-from app.services.pipeline import process_consultation
+from app.schemas import BulkRetryResponse, ConsultationDetail, ConsultationListItem, TranscriptSegmentOut, UploadResponse
 from app.services.processing_state import reset_for_manual_retry
-from app.tasks import process_consultation_task
+from app.services.object_storage import delete_audio
+from app.tasks import _enqueue_remote, export_audio_task, process_consultation_task, restore_audio_task
 
 router = APIRouter(prefix="/api/consultations", tags=["consultations"])
 CONSULTATION_TYPES = {"primary_adult", "primary_child", "repeat_adult"}
 logger = logging.getLogger(__name__)
-
-try:
-    from imageio_ffmpeg import get_ffmpeg_exe
-except ImportError:  # pragma: no cover - fallback for environments without the wheel
-    get_ffmpeg_exe = None
-
 
 def _parse_ddmmyyyy_to_date(value: str | None) -> date | None:
     if not value:
@@ -45,12 +35,6 @@ def _parse_ddmmyyyy_to_date(value: str | None) -> date | None:
     raise HTTPException(400, "Дата должна быть в формате дд/мм/гггг")
 
 
-def _run_pipeline(consultation_id: str, generation: int) -> None:
-    import asyncio
-
-    asyncio.run(process_consultation(consultation_id, generation))
-
-
 def _enqueue_processing(db: Session, row: Consultation, generation: int) -> bool:
     try:
         process_consultation_task.delay(row.id, generation)
@@ -64,7 +48,7 @@ def _enqueue_processing(db: Session, row: Consultation, generation: int) -> bool
                 Consultation.processing_generation == generation,
                 Consultation.status == "uploaded",
             )
-            .values(status="failed", error_message=f"Очередь обработки: {type(exc).__name__}: {exc}")
+            .values(error_category="queue", error_message=f"Очередь обработки: {type(exc).__name__}: {exc}")
         )
         db.commit()
         return False
@@ -78,39 +62,6 @@ def _admin_error_message(row: Consultation, role: str) -> str | None:
     if row.status == "failed":
         return f"Причина ошибки не сохранена (попыток: {row.processing_attempts}). Проверьте логи worker."
     return None
-
-
-def _normalize_browser_audio(src_path: Path) -> Path:
-    if src_path.suffix.lower() not in {".webm", ".ogg", ".m4a", ".mp4"}:
-        return src_path
-
-    normalized_path = src_path.with_suffix(".mp3")
-    ffmpeg_exe = get_ffmpeg_exe() if get_ffmpeg_exe else "ffmpeg"
-    cmd = [
-        ffmpeg_exe,
-        "-y",
-        "-i",
-        str(src_path),
-        "-vn",
-        "-acodec",
-        "libmp3lame",
-        "-b:a",
-        "128k",
-        str(normalized_path),
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    except FileNotFoundError:
-        raise HTTPException(500, "ffmpeg не найден в текущем окружении. Установите зависимость imageio-ffmpeg и повторите запуск.")
-    if result.returncode != 0 or not normalized_path.exists():
-        stderr = (result.stderr or "").strip()
-        detail = "Не удалось обработать запись браузера"
-        if stderr:
-            detail = f"{detail}: {stderr}"
-        raise HTTPException(400, detail)
-    if src_path != normalized_path:
-        src_path.unlink(missing_ok=True)
-    return normalized_path
 
 
 def _parse_optional_int(value: str | None) -> int | None:
@@ -154,17 +105,6 @@ def _remove_consultation_files(consultation_id: str, audio_path: Path, settings_
         parent.rmdir()
 
 
-def _validate_audio_duration(audio_path: Path) -> int:
-    settings = get_settings()
-    duration_sec = get_duration_sec(audio_path)
-    max_duration_sec = settings.max_audio_duration_minutes * 60
-    if duration_sec is None:
-        raise HTTPException(400, "Не удалось определить длительность аудиозаписи")
-    if duration_sec > max_duration_sec:
-        raise HTTPException(400, f"Аудиозапись не должна быть длиннее {settings.max_audio_duration_minutes} минут")
-    return duration_sec
-
-
 @router.post("/upload", response_model=UploadResponse)
 async def upload_consultation(
     file: UploadFile = File(...),
@@ -195,17 +135,30 @@ async def upload_consultation(
         raise HTTPException(400, "Поддерживаются: mp3, wav, ogg, opus, m4a, webm, mp4")
 
     settings = get_settings()
+    if not settings.mock_ai and not all((settings.yandex_api_key, settings.yandex_folder_id,
+                                        settings.object_storage_bucket,
+                                        settings.object_storage_access_key_id,
+                                        settings.object_storage_secret_access_key)):
+        raise HTTPException(503, "Обработка аудио пока не настроена. Обратитесь к администратору.")
     consultation_id = str(uuid4())
     dest_dir = settings.audio_dir / consultation_id
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / f"audio{ext}"
+    if shutil.disk_usage(dest_dir).free < (settings.max_audio_upload_mb + 512) * 1024 * 1024:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise HTTPException(507, "На сервере недостаточно места для загрузки и обработки аудио")
 
-    with dest_path.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
-
+    max_bytes = settings.max_audio_upload_mb * 1024 * 1024
+    actual_bytes = 0
     try:
-        audio_path = _normalize_browser_audio(dest_path)
-        duration_sec = _validate_audio_duration(audio_path)
+        with dest_path.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                actual_bytes += len(chunk)
+                if actual_bytes > max_bytes:
+                    raise HTTPException(413, f"Аудиофайл превышает лимит {settings.max_audio_upload_mb} МБ")
+                out.write(chunk)
+        if not actual_bytes:
+            raise HTTPException(400, "Аудиофайл пуст")
         parsed_consultation_date = _parse_ddmmyyyy_to_date(consultation_date)
         if not parsed_consultation_date:
             raise HTTPException(400, "Дата консультации обязательна")
@@ -220,7 +173,7 @@ async def upload_consultation(
         normalized_patient_name = _required_text(patient_name, "Имя пациента")
         parsed_patient_birth_date = _parse_ddmmyyyy_to_date(patient_birth_date)
         parsed_patient_age = _parse_optional_int(patient_age)
-    except HTTPException:
+    except Exception:
         shutil.rmtree(dest_dir, ignore_errors=True)
         raise
 
@@ -242,20 +195,25 @@ async def upload_consultation(
         clinic_division=normalized_clinic_division,
         doctor_name=normalized_doctor_name,
         patient_name=normalized_patient_name,
-        audio_path=str(audio_path),
+        audio_path=str(dest_path),
         original_filename=file.filename,
-        duration_sec=duration_sec,
+        audio_size_bytes=actual_bytes,
         status="uploaded",
     )
-    db.add(consultation)
-    db.commit()
+    try:
+        db.add(consultation)
+        db.commit()
+    except Exception:
+        db.rollback()
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise
 
     queued = _enqueue_processing(db, consultation, consultation.processing_generation)
 
     return UploadResponse(
         id=consultation_id,
-        status="processing" if queued else "failed",
-        message="Запись загружена, идёт обработка" if queued else "Запись сохранена, но очередь обработки недоступна",
+        status="processing" if queued else "uploaded",
+        message="Запись загружена, идёт обработка" if queued else "Запись сохранена; обработка начнётся после восстановления очереди",
     )
 
 
@@ -300,6 +258,12 @@ def delete_consultation(
     if not audio_path.is_absolute():
         audio_path = Path.cwd() / audio_path
 
+    if row.storage_key:
+        try:
+            delete_audio(row.storage_key)
+        except Exception as exc:
+            logger.exception("Could not delete Object Storage audio id=%s", consultation_id)
+            raise HTTPException(503, "Не удалось удалить аудио из хранилища") from exc
     db.delete(row)
     db.commit()
 
@@ -320,26 +284,46 @@ def export_consultation_audio(
     row = db.get(Consultation, consultation_id)
     if not row:
         raise HTTPException(404, "Запись не найдена")
+    if not (get_settings().remote_audio_enabled and get_settings().remote_audio_auto_export):
+        raise HTTPException(409, "Удалённое хранилище пока не настроено")
+    if row.status != "ready" or row.remote_export_status != "failed":
+        raise HTTPException(409, "Ручная выгрузка доступна после неудачных автоматических попыток")
+    row.remote_export_status = "pending"
+    row.remote_export_queued_at = datetime.utcnow()
+    row.remote_export_lease_until = None
+    row.remote_export_next_at = None
+    row.remote_export_first_failure_at = None
+    row.remote_export_attempts = 0
+    row.remote_export_error = None
+    db.commit()
+    _enqueue_remote(export_audio_task, consultation_id)
+    return {"ok": True, "message": "Выгрузка поставлена в очередь"}
 
-    audio_path = Path(row.audio_path)
-    if not audio_path.is_absolute():
-        audio_path = Path.cwd() / audio_path
 
-    try:
-        result = export_audio_file(consultation_id, audio_path)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-    return {
-        "ok": True,
-        "message": "Аудио выгружено",
-        "remote_audio_path": result.remote_audio_path,
-        "remote_checksum_path": result.remote_checksum_path,
-        "sha256": result.sha256,
-        "local_deleted": result.local_deleted,
-    }
+@router.post("/{consultation_id}/restore-audio")
+def restore_consultation_audio(
+    consultation_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user["role"] != "admin":
+        raise HTTPException(403, "Только для администратора")
+    row = db.get(Consultation, consultation_id)
+    if not row:
+        raise HTTPException(404, "Запись не найдена")
+    if not get_settings().remote_audio_enabled or row.remote_export_status != "done" or not row.remote_audio_sha256:
+        raise HTTPException(409, "Аудио не выгружено в удалённое хранилище")
+    if Path(row.audio_path).exists():
+        raise HTTPException(409, "Аудио уже находится на этом сервере")
+    if row.remote_restore_status in {"pending", "restoring"}:
+        raise HTTPException(409, "Восстановление уже выполняется")
+    row.remote_restore_status = "pending"
+    row.remote_restore_queued_at = datetime.utcnow()
+    row.remote_restore_lease_until = None
+    row.remote_restore_error = None
+    db.commit()
+    _enqueue_remote(restore_audio_task, consultation_id)
+    return {"ok": True, "message": "Восстановление поставлено в очередь"}
 
 
 @router.post("/{consultation_id}/retry", response_model=UploadResponse)
@@ -351,18 +335,45 @@ def retry_consultation_processing(
     row = db.get(Consultation, consultation_id)
     if not row:
         raise HTTPException(404, "Запись не найдена")
-    if not can_access_doctor_record(user, row.doctor_name):
-        raise HTTPException(403, "Недостаточно прав")
-    if row.status not in {"uploaded", "processing", "failed"}:
-        raise HTTPException(400, "Повторная обработка доступна только для загруженных, зависших или ошибочных записей")
+    if user["role"] != "admin":
+        raise HTTPException(403, "Только для администратора")
+    if row.status != "failed":
+        raise HTTPException(409, "Ручная обработка доступна после неудачных автоматических попыток")
 
+    if row.processing_stage == "submitting" or row.error_category == "submission_unknown":
+        raise HTTPException(409, "ID операции SpeechKit может быть неизвестен. Обратитесь к администратору для проверки операции.")
     generation = reset_for_manual_retry(row)
     db.commit()
     queued = _enqueue_processing(db, row, generation)
     return UploadResponse(
         id=consultation_id,
-        status="processing" if queued else "failed",
-        message="Запись отправлена на повторную обработку" if queued else "Очередь обработки недоступна",
+        status="processing" if queued else "uploaded",
+        message="Запись отправлена на повторную обработку" if queued else "Обработка начнётся после восстановления очереди",
+    )
+
+
+@router.post("/retry-all", response_model=BulkRetryResponse)
+def retry_all_failed_consultations(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user["role"] != "admin":
+        raise HTTPException(403, "Только для администратора")
+    rows = db.scalars(select(Consultation).where(
+        Consultation.status.in_(("failed", "uploaded"))
+    ).order_by(Consultation.created_at.asc())).all()
+    selected = []
+    skipped_uncertain = 0
+    for row in rows:
+        if row.processing_stage == "submitting" or row.error_category == "submission_unknown":
+            skipped_uncertain += 1
+            continue
+        selected.append((row, reset_for_manual_retry(row)))
+    db.commit()
+    queued = sum(_enqueue_processing(db, row, generation) for row, generation in selected)
+    return BulkRetryResponse(
+        selected=len(selected), queued=queued,
+        waiting_for_queue=len(selected) - queued, skipped_uncertain=skipped_uncertain,
     )
 
 
@@ -393,6 +404,22 @@ def get_consultation(
         overall_score=row.overall_score,
         status=row.status,
         error_message=_admin_error_message(row, user["role"]),
+        processing_stage=row.processing_stage if user["role"] == "admin" else None,
+        speechkit_operation_id=row.speechkit_operation_id if user["role"] == "admin" else None,
+        retry_available=(user["role"] == "admin" and row.status == "failed"
+                         and row.processing_stage != "submitting"
+                         and row.error_category != "submission_unknown"),
+        export_available=(user["role"] == "admin" and get_settings().remote_audio_enabled
+                          and get_settings().remote_audio_auto_export
+                          and row.status == "ready" and row.remote_export_status == "failed"),
+        restore_available=(user["role"] == "admin" and get_settings().remote_audio_enabled
+                           and row.remote_export_status == "done" and bool(row.remote_audio_sha256)
+                           and not Path(row.audio_path).exists()
+                           and row.remote_restore_status not in {"pending", "restoring"}),
+        remote_export_status=row.remote_export_status if user["role"] == "admin" else None,
+        remote_export_error=row.remote_export_error if user["role"] == "admin" else None,
+        remote_restore_status=row.remote_restore_status if user["role"] == "admin" else None,
+        remote_restore_error=row.remote_restore_error if user["role"] == "admin" else None,
         evaluation_report=row.evaluation_report,
         transcript_text=row.transcript_text,
         segments=[

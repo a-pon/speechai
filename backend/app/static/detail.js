@@ -46,7 +46,7 @@ async function loadDetail() {
   document.title = `${data.patient_name} — SpeechAI`;
 
   const canDelete = currentUser && (canViewAllRecords(currentUser) || currentUser.doctor_name === data.doctor_name);
-  const canExportAudio = currentUser?.role === "admin";
+  const isAdmin = currentUser?.role === "admin";
   detailHeader.innerHTML = `
     <div class="meta">
       <div><strong>Пациент:</strong> ${escapeHtml(data.patient_name)}</div>
@@ -58,12 +58,19 @@ async function loadDetail() {
       <div class="status-row">
         <span><strong>Статус:</strong> <span class="status-badge ${data.status}">${statusLabel(data.status)}</span></span>
         <span class="detail-actions">
-          ${data.status === "failed" || data.status === "processing" || data.status === "uploaded" ? '<button type="button" id="retry-processing-button">Повторить обработку</button>' : ""}
-          ${canExportAudio ? '<button type="button" id="export-audio-button">Выгрузить аудио</button>' : ""}
+          ${data.retry_available ? '<button type="button" id="retry-processing-button">Повторить обработку</button>' : ""}
+          ${data.export_available ? '<button type="button" id="export-audio-button">Выгрузить аудио</button>' : ""}
+          ${data.restore_available ? '<button type="button" id="restore-audio-button">Загрузить запись с сервера</button>' : ""}
           ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
         </span>
       </div>
-      ${canExportAudio ? '<div id="export-audio-status" class="status"></div>' : ""}
+      ${isAdmin ? '<div id="remote-audio-status" class="status"></div>' : ""}
+      ${isAdmin && data.remote_export_status === "exporting" ? '<div>Аудио выгружается…</div>' : ""}
+      ${isAdmin && ["pending", "restoring"].includes(data.remote_restore_status) ? '<div>Аудио восстанавливается…</div>' : ""}
+      ${isAdmin && data.remote_export_error ? `<div class="error-text"><strong>Выгрузка:</strong> ${escapeHtml(data.remote_export_error)}</div>` : ""}
+      ${isAdmin && data.remote_restore_error ? `<div class="error-text"><strong>Восстановление:</strong> ${escapeHtml(data.remote_restore_error)}</div>` : ""}
+      ${currentUser?.role === "admin" && data.processing_stage ? `<div><strong>Этап:</strong> ${escapeHtml(data.processing_stage)}</div>` : ""}
+      ${currentUser?.role === "admin" && data.speechkit_operation_id ? `<div><strong>SpeechKit ID:</strong> ${escapeHtml(data.speechkit_operation_id)}</div>` : ""}
       ${currentUser?.role === "admin" && data.error_message ? `<div class="error-text"><strong>Ошибка:</strong> ${escapeHtml(data.error_message)}</div>` : ""}
     </div>
   `;
@@ -81,21 +88,39 @@ async function loadDetail() {
 
   const exportAudioBtn = detailHeader.querySelector("#export-audio-button");
   if (exportAudioBtn) {
-    const exportStatus = detailHeader.querySelector("#export-audio-status");
+    const exportStatus = detailHeader.querySelector("#remote-audio-status");
     exportAudioBtn.onclick = async () => {
       exportAudioBtn.disabled = true;
-      exportStatus.textContent = "Выгружаем аудио...";
+      exportStatus.textContent = "Ставим выгрузку в очередь…";
       try {
         const resExport = await apiFetch(`/api/consultations/${consultationId}/export-audio`, { method: "POST" });
         const payload = await resExport.json().catch(() => ({}));
         if (!resExport.ok) {
           throw new Error(formatErrorMessage(payload, "Не удалось выгрузить аудио"));
         }
-        exportStatus.textContent = `Аудио выгружено: ${payload.remote_audio_path || "готово"}`;
+        exportStatus.textContent = payload.message;
       } catch (err) {
         exportStatus.textContent = "Ошибка выгрузки: " + formatErrorMessage(err, "Не удалось выгрузить аудио");
       } finally {
         exportAudioBtn.disabled = false;
+      }
+    };
+  }
+
+  const restoreAudioBtn = detailHeader.querySelector("#restore-audio-button");
+  if (restoreAudioBtn) {
+    const remoteStatus = detailHeader.querySelector("#remote-audio-status");
+    restoreAudioBtn.onclick = async () => {
+      restoreAudioBtn.disabled = true;
+      remoteStatus.textContent = "Ставим восстановление в очередь…";
+      try {
+        const response = await apiFetch(`/api/consultations/${consultationId}/restore-audio`, { method: "POST" });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(formatErrorMessage(payload, "Не удалось восстановить аудио"));
+        await loadDetail();
+      } catch (err) {
+        remoteStatus.textContent = "Ошибка: " + formatErrorMessage(err, "Не удалось восстановить аудио");
+        restoreAudioBtn.disabled = false;
       }
     };
   }

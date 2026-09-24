@@ -24,12 +24,21 @@ services:
       YANDEX_FOLDER_ID: "${YANDEX_FOLDER_ID:-}"
       YANDEXGPT_MODEL: "${YANDEXGPT_MODEL:-yandexgpt}"
       MAX_AUDIO_DURATION_MINUTES: "${MAX_AUDIO_DURATION_MINUTES:-120}"
+      MAX_AUDIO_UPLOAD_MB: "${MAX_AUDIO_UPLOAD_MB:-300}"
+      OBJECT_STORAGE_BUCKET: "${OBJECT_STORAGE_BUCKET:-}"
+      OBJECT_STORAGE_ACCESS_KEY_ID: "${OBJECT_STORAGE_ACCESS_KEY_ID:-}"
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: "${OBJECT_STORAGE_SECRET_ACCESS_KEY:-}"
+      SPEECHKIT_POLL_SECONDS: "${SPEECHKIT_POLL_SECONDS:-60}"
+      SPEECHKIT_MAX_HOURS: "${SPEECHKIT_MAX_HOURS:-24}"
+      PROCESSING_LEASE_SECONDS: "${PROCESSING_LEASE_SECONDS:-600}"
+      AUTO_RETRY_MAX_HOURS: "${AUTO_RETRY_MAX_HOURS:-24}"
       RECOVER_PENDING_ON_STARTUP: "${RECOVER_PENDING_ON_STARTUP:-true}"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       DATABASE_URL: "sqlite:////data/speechai.db"
       AUDIO_DIR: "/data/audio"
       SESSION_SECRET: "${SESSION_SECRET:-change-me}"
       REMOTE_AUDIO_ENABLED: "${REMOTE_AUDIO_ENABLED:-false}"
+      REMOTE_AUDIO_AUTO_EXPORT: "${REMOTE_AUDIO_AUTO_EXPORT:-false}"
       REMOTE_AUDIO_HOST: "${REMOTE_AUDIO_HOST:-}"
       REMOTE_AUDIO_PORT: "${REMOTE_AUDIO_PORT:-22}"
       REMOTE_AUDIO_USER: "${REMOTE_AUDIO_USER:-}"
@@ -59,11 +68,28 @@ services:
       YANDEX_API_KEY: "${YANDEX_API_KEY:-}"
       YANDEX_FOLDER_ID: "${YANDEX_FOLDER_ID:-}"
       YANDEXGPT_MODEL: "${YANDEXGPT_MODEL:-yandexgpt}"
+      MAX_AUDIO_DURATION_MINUTES: "${MAX_AUDIO_DURATION_MINUTES:-120}"
+      MAX_AUDIO_UPLOAD_MB: "${MAX_AUDIO_UPLOAD_MB:-300}"
+      OBJECT_STORAGE_BUCKET: "${OBJECT_STORAGE_BUCKET:-}"
+      OBJECT_STORAGE_ACCESS_KEY_ID: "${OBJECT_STORAGE_ACCESS_KEY_ID:-}"
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: "${OBJECT_STORAGE_SECRET_ACCESS_KEY:-}"
+      SPEECHKIT_POLL_SECONDS: "${SPEECHKIT_POLL_SECONDS:-60}"
+      SPEECHKIT_MAX_HOURS: "${SPEECHKIT_MAX_HOURS:-24}"
+      PROCESSING_LEASE_SECONDS: "${PROCESSING_LEASE_SECONDS:-600}"
+      AUTO_RETRY_MAX_HOURS: "${AUTO_RETRY_MAX_HOURS:-24}"
       RECOVER_PENDING_ON_STARTUP: "${RECOVER_PENDING_ON_STARTUP:-true}"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       DATABASE_URL: "sqlite:////data/speechai.db"
       AUDIO_DIR: "/data/audio"
       SESSION_SECRET: "${SESSION_SECRET:-change-me}"
+      REMOTE_AUDIO_ENABLED: "${REMOTE_AUDIO_ENABLED:-false}"
+      REMOTE_AUDIO_AUTO_EXPORT: "${REMOTE_AUDIO_AUTO_EXPORT:-false}"
+      REMOTE_AUDIO_HOST: "${REMOTE_AUDIO_HOST:-}"
+      REMOTE_AUDIO_PORT: "${REMOTE_AUDIO_PORT:-22}"
+      REMOTE_AUDIO_USER: "${REMOTE_AUDIO_USER:-}"
+      REMOTE_AUDIO_BASE_DIR: "${REMOTE_AUDIO_BASE_DIR:-}"
+      REMOTE_AUDIO_SSH_KEY: "${REMOTE_AUDIO_SSH_KEY:-}"
+      REMOTE_AUDIO_DELETE_LOCAL_AFTER_UPLOAD: "${REMOTE_AUDIO_DELETE_LOCAL_AFTER_UPLOAD:-false}"
     volumes:
       - ./volumes/data:/data
     depends_on:
@@ -72,3 +98,52 @@ services:
     restart: unless-stopped
     mem_limit: "${WORKER_MEMORY_LIMIT:-384m}"
     cpus: ${WORKER_CPU_LIMIT:-0.75}
+
+  speechai-beat:
+    build: .
+    image: speechai:local
+    container_name: speechai-beat
+    command: ["celery", "-A", "app.tasks:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    environment:
+      MOCK_AI: "${MOCK_AI:-true}"
+      REMOTE_AUDIO_ENABLED: "${REMOTE_AUDIO_ENABLED:-false}"
+      REMOTE_AUDIO_AUTO_EXPORT: "${REMOTE_AUDIO_AUTO_EXPORT:-false}"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      DATABASE_URL: "sqlite:////data/speechai.db"
+      AUDIO_DIR: "/data/audio"
+    volumes:
+      - ./volumes/data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: "128m"
+
+  speechai-export-worker:
+    profiles: ["remote-audio"]
+    build: .
+    image: speechai:local
+    container_name: speechai-export-worker
+    command: ["celery", "-A", "app.tasks:celery_app", "worker", "--loglevel=INFO", "--pool=solo", "--concurrency=1", "--queues=audio-export", "--without-gossip", "--without-mingle"]
+    environment:
+      MOCK_AI: "${MOCK_AI:-true}"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      DATABASE_URL: "sqlite:////data/speechai.db"
+      AUDIO_DIR: "/data/audio"
+      REMOTE_AUDIO_ENABLED: "${REMOTE_AUDIO_ENABLED:-false}"
+      REMOTE_AUDIO_AUTO_EXPORT: "${REMOTE_AUDIO_AUTO_EXPORT:-false}"
+      REMOTE_AUDIO_HOST: "${REMOTE_AUDIO_HOST:-}"
+      REMOTE_AUDIO_PORT: "${REMOTE_AUDIO_PORT:-22}"
+      REMOTE_AUDIO_USER: "${REMOTE_AUDIO_USER:-}"
+      REMOTE_AUDIO_BASE_DIR: "${REMOTE_AUDIO_BASE_DIR:-}"
+      REMOTE_AUDIO_SSH_KEY: "/run/remote-ssh/id_ed25519"
+      REMOTE_AUDIO_DELETE_LOCAL_AFTER_UPLOAD: "${REMOTE_AUDIO_DELETE_LOCAL_AFTER_UPLOAD:-false}"
+      AUTO_RETRY_MAX_HOURS: "${AUTO_RETRY_MAX_HOURS:-24}"
+    volumes:
+      - ./volumes/data:/data
+      - ./volumes/remote-ssh:/run/remote-ssh:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: "${EXPORT_WORKER_MEMORY_LIMIT:-192m}"
