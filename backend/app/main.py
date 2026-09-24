@@ -16,6 +16,13 @@ STATIC_DIR = Path(__file__).parent / "static"
 CONSULTATION_HTML = STATIC_DIR / "consultation.html"
 
 
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: dict):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 def _consultation_page() -> FileResponse:
     return FileResponse(CONSULTATION_HTML, media_type="text/html", headers={"Cache-Control": "no-store"})
 
@@ -110,4 +117,4 @@ app.include_router(auth_router)
 app.include_router(integration_router)
 app.include_router(users_router)
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
