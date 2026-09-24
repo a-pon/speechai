@@ -64,6 +64,7 @@ async function loadDetail() {
           ${canDelete ? '<button type="button" class="btn-delete">Удалить</button>' : ""}
         </span>
       </div>
+      ${data.status === "invalid_audio" ? '<div class="hint">Запись почти без звука. Проверьте микрофон или источник файла и загрузите запись со слышимой речью.</div>' : ""}
       ${isAdmin ? '<div id="remote-audio-status" class="status"></div>' : ""}
       ${isAdmin && data.remote_export_status === "exporting" ? '<div>Аудио выгружается…</div>' : ""}
       ${isAdmin && ["pending", "restoring"].includes(data.remote_restore_status) ? '<div>Аудио восстанавливается…</div>' : ""}

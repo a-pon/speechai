@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
 import json
+import math
+import struct
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
@@ -157,7 +159,10 @@ class DurablePipelineTests(unittest.TestCase):
             output.setnchannels(1)
             output.setsampwidth(2)
             output.setframerate(8000)
-            output.writeframes(b"\0\0" * 8000)
+            output.writeframes(b"".join(
+                struct.pack("<h", int(13 * math.sin(2 * math.pi * 440 * i / 8000)))
+                for i in range(8000)
+            ))
         with self.Session() as db:
             row = db.get(Consultation, "record-1")
             row.audio_path = str(audio_path)
@@ -274,6 +279,56 @@ class DurablePipelineTests(unittest.TestCase):
             with self.assertRaises(AudioValidationError):
                 validate_audio(self.audio)
 
+    def test_silence_check_decodes_full_audio_and_accepts_speech_level_signal(self):
+        import wave
+        from app.services.audio_prepare import SilentAudioError, validate_audio
+
+        audio_path = self.audio.with_suffix(".wav")
+        settings = SimpleNamespace(mock_ai=False, max_audio_upload_mb=1,
+                                   max_audio_duration_minutes=120)
+        with wave.open(str(audio_path), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(8000)
+            output.writeframes(b"\0\0" * 8000)
+        with patch("app.services.audio_prepare.get_settings", return_value=settings):
+            with self.assertRaises(SilentAudioError):
+                validate_audio(audio_path)
+
+        samples = (int(8000 * math.sin(2 * math.pi * 440 * i / 8000)) for i in range(8000))
+        with wave.open(str(audio_path), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(8000)
+            output.writeframes(b"".join(struct.pack("<h", value) for value in samples))
+        with patch("app.services.audio_prepare.get_settings", return_value=settings):
+            self.assertEqual(validate_audio(audio_path)[1], 1)
+
+    def test_empty_result_from_silent_record_is_not_retried(self):
+        from app.services.audio_prepare import SilentAudioError
+
+        with self.Session() as db:
+            row = db.get(Consultation, "record-1")
+            row.processing_stage = "poll"
+            row.speechkit_operation_id = "op-123"
+            row.speechkit_started_at = datetime.utcnow()
+            row.recognition_empty_polls = 12
+            db.commit()
+        settings = SimpleNamespace(speechkit_max_hours=24, speechkit_poll_seconds=60,
+                                   auto_retry_max_hours=24)
+        with patch("app.services.pipeline.SessionLocal", self.Session), \
+             patch("app.services.pipeline.get_settings", return_value=settings), \
+             patch("app.services.pipeline.poll_recognition", new_callable=AsyncMock,
+                   return_value=(True, None)), \
+             patch("app.services.pipeline.has_usable_signal", return_value=False), \
+             patch("app.services.pipeline.start_recognition", new_callable=AsyncMock) as start:
+            with self.assertRaises(SilentAudioError) as failure:
+                asyncio.run(process_step("record-1", 0))
+            self.assertIsNone(record_failure("record-1", 0, failure.exception))
+        self.assertEqual(self.row().status, "invalid_audio")
+        self.assertEqual(self.row().error_category, "silent_audio")
+        start.assert_not_awaited()
+
     def test_manual_retry_invalidates_old_generation(self):
         with self.Session() as db:
             row = db.get(Consultation, "record-1")
@@ -320,7 +375,7 @@ class DurablePipelineTests(unittest.TestCase):
             row = db.get(Consultation, "record-1")
             row.status = "failed"
             for record_id, status in (("ready-1", "ready"), ("uploaded-1", "uploaded"),
-                                      ("uncertain-1", "failed")):
+                                      ("uncertain-1", "failed"), ("silent-1", "invalid_audio")):
                 db.add(Consultation(
                     id=record_id, consultation_date=date(2026, 9, 24), doctor_name="Врач",
                     patient_name="Пациент", audio_path=str(self.audio), original_filename="audio.mp3",
@@ -332,6 +387,7 @@ class DurablePipelineTests(unittest.TestCase):
             self.assertEqual((result.selected, result.queued, result.skipped_uncertain), (2, 2, 1))
             self.assertEqual(enqueue.call_count, 2)
             self.assertEqual(db.get(Consultation, "ready-1").status, "ready")
+            self.assertEqual(db.get(Consultation, "silent-1").processing_generation, 0)
             self.assertEqual(db.get(Consultation, "uncertain-1").processing_generation, 0)
             with self.assertRaises(HTTPException) as denied:
                 retry_all_failed_consultations(db=db, user={"role": "doctor"})

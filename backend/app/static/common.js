@@ -18,6 +18,7 @@ function statusLabel(status) {
     processing: "обработка",
     ready: "готово",
     failed: "ошибка",
+    invalid_audio: "звук не обнаружен",
   };
   return map[status] || status;
 }

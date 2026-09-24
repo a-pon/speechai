@@ -191,6 +191,7 @@ tbody tr:hover { background: #f5f5f5; }
 .status-badge.processing { color: #b8860b; }
 .status-badge.ready { color: #228b22; }
 .status-badge.failed { color: #b22222; }
+.status-badge.invalid_audio { color: #8b5a00; }
 .evaluation-text { font-size: 0.9rem; }
 .error-text { color: #b22222; margin-top: 0.5rem; }
 

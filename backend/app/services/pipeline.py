@@ -11,7 +11,7 @@ from sqlalchemy import delete, update
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import Consultation, TranscriptSegment
-from app.services.audio_prepare import AudioValidationError, prepare_audio
+from app.services.audio_prepare import AudioValidationError, SilentAudioError, has_usable_signal, prepare_audio
 from app.services.mock_ai import mock_transcribe
 from app.services.object_storage import audio_uri, upload_audio
 from app.services.speechkit import format_transcript, poll_recognition, start_recognition
@@ -128,6 +128,8 @@ async def process_step(consultation_id: str, generation: int) -> int | None:
                      processing_attempts=0, stage_first_failure_at=None, worker_interruptions=0)
             return settings.speechkit_poll_seconds
         if not segments:
+            if (empty_polls == 0 or empty_polls >= 11) and not has_usable_signal(path):
+                raise SilentAudioError("Звуковой сигнал слишком тихий: проверьте исходную аудиозапись")
             if empty_polls >= 11:
                 raise RuntimeError(f"SpeechKit: завершённая операция {operation_id} не вернула распознанный текст")
             _advance(consultation_id, generation, stage, speechkit_last_poll_at=datetime.utcnow(),
@@ -173,6 +175,8 @@ def classify_error(exc: Exception, stage: str) -> tuple[str, bool]:
                         or any(word in message for word in ("timeout", "network", "connect", "endpoint")))
     if "недостаточно места" in message:
         return "disk_space", False
+    if isinstance(exc, SilentAudioError):
+        return "silent_audio", False
     if isinstance(exc, AudioValidationError):
         return "audio_validation", False
     if "не настроен" in message or "задайте yandex" in message:
@@ -222,10 +226,14 @@ def record_failure(consultation_id: str, generation: int, exc: Exception) -> int
             row.lease_until = datetime.utcnow() + timedelta(seconds=delay)
         else:
             delay = None
-            row.status = "failed"
+            row.status = "invalid_audio" if category == "silent_audio" else "failed"
             row.lease_until = None
         db.commit()
-        logger.error("Processing failed id=%s stage=%s category=%s attempts=%s",
-                     consultation_id, row.processing_stage, category, attempts,
-                     exc_info=(type(exc), exc, exc.__traceback__))
+        if category == "silent_audio":
+            logger.warning("Audio has no usable signal id=%s stage=%s", consultation_id,
+                           row.processing_stage)
+        else:
+            logger.error("Processing failed id=%s stage=%s category=%s attempts=%s",
+                         consultation_id, row.processing_stage, category, attempts,
+                         exc_info=(type(exc), exc, exc.__traceback__))
         return delay
