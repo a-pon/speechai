@@ -48,6 +48,7 @@ def _migrate_sqlite() -> None:
         "lease_until": "DATETIME",
         "queued_at": "DATETIME",
         "audio_size_bytes": "INTEGER",
+        "recording_diagnostics_json": "TEXT",
         "storage_key": "VARCHAR(512)",
         "speechkit_operation_id": "VARCHAR(255)",
         "speechkit_started_at": "DATETIME",

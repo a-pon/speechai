@@ -32,6 +32,7 @@ class Consultation(Base):
     patient_name: Mapped[str] = mapped_column(String(255))
     audio_path: Mapped[str] = mapped_column(String(512))
     original_filename: Mapped[str] = mapped_column(String(255))
+    recording_diagnostics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_sec: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="uploaded")
     processing_stage: Mapped[str] = mapped_column(String(32), default="prepare")

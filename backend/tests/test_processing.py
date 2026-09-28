@@ -128,6 +128,61 @@ class SpeechKitParsingTests(unittest.TestCase):
         self.assertEqual(segments[0].text, "Тест")
 
 
+class YandexGPTScoreTests(unittest.TestCase):
+    def test_six_stage_grades_supply_missing_total(self):
+        from app.services.yandex_gpt import _score_report
+
+        report = "\n".join(f"Этап {index}\n**Оценка:** {grade} из 5"
+                           for index, grade in enumerate((3, 4, 2, 5, 3, 1), 1))
+        completed, score = _score_report(report)
+        self.assertEqual(score, 3.0)
+        self.assertIn("Общий балл: 3.00 из 5", completed)
+
+        corrected, score = _score_report(report + "\nОбщий балл: 5 из 5")
+        self.assertEqual(score, 3.0)
+        self.assertIn("Общий балл: 3.00 из 5", corrected)
+
+    def test_invalid_report_gets_one_format_retry(self):
+        from app.services.yandex_gpt import evaluate_transcript
+
+        class Response:
+            status_code = 200
+            is_error = False
+
+            def __init__(self, report):
+                self.report = report
+
+            def json(self):
+                return {"result": {"alternatives": [{"message": {"text": self.report}}]}}
+
+        class Client:
+            def __init__(self):
+                self.prompts = []
+                self.reports = ["Нет оценки", "Общий балл: 3 из 5"]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, _url, **kwargs):
+                self.prompts.append(kwargs["json"]["messages"][1]["text"])
+                return Response(self.reports.pop(0))
+
+        client = Client()
+        settings = SimpleNamespace(mock_ai=False, yandex_api_key="test", yandex_folder_id="folder",
+                                   yandexgpt_model="model")
+        with patch("app.services.yandex_gpt.get_settings", return_value=settings), \
+             patch("app.services.yandex_gpt._load_prompt", return_value="Оцени шесть этапов"), \
+             patch("app.services.yandex_gpt.httpx.AsyncClient", return_value=client):
+            report, score = asyncio.run(evaluate_transcript("Тестовый разговор"))
+        self.assertEqual(score, 3.0)
+        self.assertEqual(report, "Общий балл: 3 из 5")
+        self.assertEqual(len(client.prompts), 2)
+        self.assertIn("шести этапов", client.prompts[1])
+
+
 class DurablePipelineTests(unittest.TestCase):
     def setUp(self):
         self.temporary_dir = tempfile.TemporaryDirectory()
@@ -240,6 +295,27 @@ class DurablePipelineTests(unittest.TestCase):
         self.assertEqual(summarize.await_count, 3)
         final.assert_awaited_once()
         self.assertEqual(self.row().status, "ready")
+
+    def test_retry_after_evaluation_failure_reuses_saved_transcript(self):
+        with self.Session() as db:
+            row = db.get(Consultation, "record-1")
+            row.status = "failed"
+            row.processing_stage = "evaluate"
+            row.transcript_text = "[Врач] Сохранённый текст консультации"
+            generation = reset_for_manual_retry(row)
+            db.commit()
+        from app.tasks import _claim
+        with patch("app.tasks.SessionLocal", self.Session):
+            self.assertTrue(_claim("record-1", generation))
+        with patch("app.services.pipeline.SessionLocal", self.Session), \
+             patch("app.services.pipeline.get_settings", return_value=SimpleNamespace(mock_ai=False)), \
+             patch("app.services.pipeline.evaluate_transcript", new_callable=AsyncMock,
+                   return_value=("Общий балл: 3 из 5", 3.0)) as evaluate, \
+             patch("app.services.pipeline.start_recognition", new_callable=AsyncMock) as speechkit:
+            self.assertIsNone(asyncio.run(process_step("record-1", generation)))
+        self.assertEqual(self.row().status, "ready")
+        evaluate.assert_awaited_once()
+        speechkit.assert_not_awaited()
 
     def test_definite_rate_limit_can_retry_submission(self):
         with self.Session() as db:
@@ -366,6 +442,21 @@ class DurablePipelineTests(unittest.TestCase):
         self.assertIsNone(delay)
         self.assertEqual(self.row().status, "partial_audio")
         self.assertEqual(self.row().error_category, "interrupted_audio")
+
+    def test_recorder_failure_stops_before_speechkit(self):
+        from app.services.audio_prepare import InterruptedAudioError
+
+        with self.Session() as db:
+            row = db.get(Consultation, "record-1")
+            row.recording_diagnostics_json = json.dumps({"events": [{"type": "ended", "at_sec": 12}]})
+            db.commit()
+        with patch("app.services.pipeline.SessionLocal", self.Session), \
+             patch("app.services.pipeline.prepare_audio") as prepare, \
+             patch("app.services.pipeline.start_recognition", new_callable=AsyncMock) as start:
+            with self.assertRaises(InterruptedAudioError):
+                asyncio.run(process_step("record-1", 0))
+        prepare.assert_not_called()
+        start.assert_not_awaited()
 
     def test_bad_conversion_keeps_source_and_target_for_diagnosis(self):
         from app.services.audio_prepare import InterruptedAudioError, prepare_audio
@@ -536,6 +627,7 @@ class DurablePipelineTests(unittest.TestCase):
             row.status = "ready"
             row.remote_export_status = "failed"
             row.remote_export_error = "SSH unavailable"
+            row.recording_diagnostics_json = json.dumps({"device_label": "USB microphone", "events": []})
             db.commit()
             settings = SimpleNamespace(remote_audio_enabled=True, remote_audio_auto_export=True)
             with patch("app.api.consultations.get_settings", return_value=settings):
@@ -543,6 +635,7 @@ class DurablePipelineTests(unittest.TestCase):
                     user={"role": "doctor", "doctor_name": "Врач", "can_view_all_records": False})
                 self.assertFalse(doctor_detail.export_available)
                 self.assertIsNone(doctor_detail.remote_export_error)
+                self.assertIsNone(doctor_detail.recording_diagnostics)
                 with self.assertRaises(HTTPException) as denied:
                     export_consultation_audio("record-1", db=db, user={"role": "doctor"})
                 self.assertEqual(denied.exception.status_code, 403)
@@ -550,9 +643,23 @@ class DurablePipelineTests(unittest.TestCase):
                     user={"role": "admin", "doctor_name": None, "can_view_all_records": True})
                 self.assertTrue(admin_detail.export_available)
                 self.assertEqual(admin_detail.remote_export_error, "SSH unavailable")
+                self.assertEqual(admin_detail.recording_diagnostics["device_label"], "USB microphone")
 
 
 class AccessAndStorageTests(unittest.TestCase):
+    def test_recorder_diagnostics_reject_unbounded_and_unknown_data(self):
+        from app.api.consultations import _normalize_recording_diagnostics
+
+        self.assertIsNone(_normalize_recording_diagnostics("{" + "x" * 4096))
+        normalized = json.loads(_normalize_recording_diagnostics(json.dumps({
+            "version": 1, "device_label": "USB microphone", "monitor": "running",
+            "last_signal_sec": 74.5, "longest_no_signal_sec": 60,
+            "events": [{"type": "mute", "at_sec": 75}, {"type": "unknown", "at_sec": 76}],
+            "transcript": "must be discarded",
+        })))
+        self.assertEqual(normalized["events"], [{"type": "mute", "at_sec": 75}])
+        self.assertNotIn("transcript", normalized)
+
     def test_error_detail_admin_only(self):
         from app.api.consultations import _admin_error_message
         row = SimpleNamespace(error_message="poll [speechkit]: secret detail", status="failed",
@@ -626,7 +733,8 @@ class MigrationTests(unittest.TestCase):
         columns = {column["name"] for column in inspect(engine).get_columns("consultations")}
         self.assertIn("processing_generation", columns)
         self.assertTrue({"processing_stage", "lease_until", "queued_at", "storage_key",
-                         "speechkit_operation_id", "evaluation_chunks_json", "error_category"} <= columns)
+                         "speechkit_operation_id", "evaluation_chunks_json", "error_category",
+                         "recording_diagnostics_json"} <= columns)
         with engine.connect() as connection:
             generation = connection.scalar(text("SELECT processing_generation FROM consultations WHERE id = 'old-record'"))
         self.assertEqual(generation, 0)

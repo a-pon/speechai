@@ -75,12 +75,16 @@ async def process_step(consultation_id: str, generation: int) -> int | None:
         transcript = row.transcript_text
         consultation_type = row.consultation_type
         summaries = json.loads(row.evaluation_chunks_json or "[]")
+        recording_diagnostics = json.loads(row.recording_diagnostics_json or "{}")
 
     settings = get_settings()
     if stage == "prepare" and transcript:
         return 0 if _advance(consultation_id, generation, stage, processing_stage="evaluate") else None
 
     if stage == "prepare":
+        if any(event.get("type") in {"ended", "recorder_error", "unexpected_stop"}
+               for event in recording_diagnostics.get("events", [])):
+            raise InterruptedAudioError("Запись оборвалась из-за микрофона или браузера до нажатия остановки")
         prepared_path, size, duration = prepare_audio(path)
         if not _advance(consultation_id, generation, stage, audio_path=str(prepared_path),
                         audio_size_bytes=size, duration_sec=duration,

@@ -73,6 +73,7 @@ async function loadDetail() {
       ${isAdmin && data.remote_restore_error ? `<div class="error-text"><strong>Восстановление:</strong> ${escapeHtml(data.remote_restore_error)}</div>` : ""}
       ${currentUser?.role === "admin" && data.processing_stage ? `<div><strong>Этап:</strong> ${escapeHtml(data.processing_stage)}</div>` : ""}
       ${currentUser?.role === "admin" && data.speechkit_operation_id ? `<div><strong>SpeechKit ID:</strong> ${escapeHtml(data.speechkit_operation_id)}</div>` : ""}
+      ${isAdmin && data.recording_diagnostics ? `<div><strong>Микрофон браузера:</strong> ${escapeHtml(data.recording_diagnostics.device_label || "устройство по умолчанию")}; проверка уровня: ${data.recording_diagnostics.monitor === "running" ? "работала" : "недоступна"}; последний сигнал: ${data.recording_diagnostics.last_signal_sec == null ? "не зафиксирован" : Math.round(data.recording_diagnostics.last_signal_sec) + " с"}; самая длинная пауза без сигнала: ${Math.round(data.recording_diagnostics.longest_no_signal_sec || 0)} с; события: ${escapeHtml((data.recording_diagnostics.events || []).map((event) => `${event.type} (${Math.round(event.at_sec)} с)`).join(", ") || "нет")}</div>` : ""}
       ${currentUser?.role === "admin" && data.error_message ? `<div class="error-text"><strong>Ошибка:</strong> ${escapeHtml(data.error_message)}</div>` : ""}
     </div>
   `;

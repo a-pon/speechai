@@ -37,6 +37,7 @@ class ConsultationDetail(BaseModel):
     overall_score: float | None
     status: str
     error_message: str | None
+    recording_diagnostics: dict | None = None
     processing_stage: str | None = None
     speechkit_operation_id: str | None = None
     retry_available: bool = False

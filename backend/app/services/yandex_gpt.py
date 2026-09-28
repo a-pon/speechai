@@ -20,13 +20,31 @@ def _load_prompt(consultation_type: str) -> str:
 
 
 def _parse_overall_score(report: str) -> float | None:
-    match = re.search(r"Общий балл:\s*([\d.,]+)", report)
+    match = re.search(r"Общий балл(?:\*\*)?\s*:(?:\*\*)?\s*([\d.,]+)", report, re.IGNORECASE)
     if not match:
         return None
     try:
         return float(match.group(1).replace(",", "."))
     except ValueError:
         return None
+
+
+def _score_report(report: str) -> tuple[str, float | None]:
+    """Use the six stage grades when present; their mean is the contract for the total."""
+    scores = [float(value.replace(",", ".")) for value in re.findall(
+        r"(?im)^\s*(?:[-*]\s*)?(?:\*\*)?Оценка(?:\*\*)?\s*:(?:\*\*)?\s*(?:\*\*)?([1-5](?:[.,]\d+)?)(?!\d)",
+        report,
+    )]
+    if len(scores) == 6 and all(1 <= score <= 5 for score in scores):
+        score = round(sum(scores) / 6, 2)
+        total = re.compile(r"(Общий балл(?:\*\*)?\s*:(?:\*\*)?\s*(?:\*\*)?)([\d.,]+)", re.IGNORECASE)
+        if total.search(report):
+            report = total.sub(lambda match: match.group(1) + f"{score:.2f}", report, count=1)
+        else:
+            report = report.rstrip() + f"\n\nОбщий балл: {score:.2f} из 5."
+        return report, score
+    score = _parse_overall_score(report)
+    return report, score if score is not None and 1 <= score <= 5 else None
 
 
 def _is_moderation_refusal(data: dict, alternative: dict, report: str) -> bool:
@@ -74,37 +92,47 @@ async def evaluate_transcript(transcript: str, consultation_type: str = "primary
     }
 
     async with httpx.AsyncClient(timeout=180.0) as client:
-        response = None
-        for attempt in range(4):
-            try:
-                response = await client.post(url, headers=headers, json=body)
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
-                if attempt == 3:
-                    raise RuntimeError(
-                        f"YandexGPT network request failed after retries ({type(exc).__name__})"
-                    ) from exc
-                await asyncio.sleep(min(2 ** attempt + random.random(), 8))
-                continue
-            if response.status_code == 429 or response.status_code >= 500:
-                if attempt < 3:
+        for format_attempt in range(2):
+            response = None
+            for attempt in range(4):
+                try:
+                    response = await client.post(url, headers=headers, json=body)
+                except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                    if attempt == 3:
+                        raise RuntimeError(
+                            f"YandexGPT network request failed after retries ({type(exc).__name__})"
+                        ) from exc
                     await asyncio.sleep(min(2 ** attempt + random.random(), 8))
                     continue
-            if response.is_error:
-                detail = response.text.strip().replace("\n", " ")[:1000]
-                raise RuntimeError(f"YandexGPT HTTP {response.status_code}: {detail or response.reason_phrase}")
-            break
-        if response is None:
-            raise RuntimeError("YandexGPT request retries exhausted")
-        data = response.json()
-
-    alternative = data["result"]["alternatives"][0]
-    report = alternative["message"]["text"]
-    if _is_moderation_refusal(data, alternative, report):
-        raise RuntimeError(
-            "YandexGPT: оценка заблокирована модерацией content_filter. "
-            "Нужна настройка правил модерации/инстанса в AI Studio или повторная обработка с другим YandexGPT-инстансом."
-        )
-    return report, _parse_overall_score(report)
+                if response.status_code == 429 or response.status_code >= 500:
+                    if attempt < 3:
+                        await asyncio.sleep(min(2 ** attempt + random.random(), 8))
+                        continue
+                if response.is_error:
+                    detail = response.text.strip().replace("\n", " ")[:1000]
+                    raise RuntimeError(f"YandexGPT HTTP {response.status_code}: {detail or response.reason_phrase}")
+                break
+            if response is None:
+                raise RuntimeError("YandexGPT request retries exhausted")
+            data = response.json()
+            alternative = data["result"]["alternatives"][0]
+            report = alternative["message"]["text"]
+            if _is_moderation_refusal(data, alternative, report):
+                raise RuntimeError(
+                    "YandexGPT: оценка заблокирована модерацией content_filter. "
+                    "Нужна настройка правил модерации/инстанса в AI Studio или повторная обработка с другим YandexGPT-инстансом."
+                )
+            report, score = _score_report(report)
+            if score is not None:
+                return report, score
+            if format_attempt == 0:
+                body["messages"][1]["text"] = (
+                    user_message + "\n\nПовтори отчёт строго по шаблону. Для каждого из шести этапов "
+                    "напиши отдельную строку «Оценка: N», где N — число от 1 до 5. "
+                    "Добавь строку «Общий балл: N», равную среднему шести оценок. "
+                    "Пиши кратко, чтобы весь отчёт поместился в ответ."
+                )
+    raise RuntimeError("YandexGPT: отчёт не содержит корректных баллов по этапам или общего балла")
 
 
 def split_transcript(transcript: str, max_chars: int = 9000) -> list[str]:

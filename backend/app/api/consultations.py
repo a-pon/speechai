@@ -1,4 +1,6 @@
+import json
 import logging
+import math
 import shutil
 from datetime import date, datetime
 from pathlib import Path
@@ -93,6 +95,51 @@ def _normalize_consultation_type(value: str | None) -> str:
     return normalized
 
 
+def _normalize_recording_diagnostics(raw: str | None) -> str | None:
+    """Keep only bounded, non-audio recorder health data from the browser."""
+    if not raw or len(raw) > 4096:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return None
+
+    def seconds(value):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                numeric = float(value)
+            except OverflowError:
+                return None
+            if math.isfinite(numeric) and 0 <= numeric <= 7201:
+                return round(numeric, 1)
+        return None
+
+    events = []
+    for event in data.get("events", []) if isinstance(data.get("events"), list) else []:
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str) or event["type"] not in {
+            "mute", "unmute", "ended", "recorder_error", "unexpected_stop"
+        }:
+            continue
+        at_sec = seconds(event.get("at_sec"))
+        if at_sec is not None:
+            events.append({"type": event["type"], "at_sec": at_sec})
+        if len(events) == 20:
+            break
+    monitor = data.get("monitor")
+    normalized = {
+        "version": 1,
+        "device_label": str(data.get("device_label") or "")[:120].replace("\n", " "),
+        "mime_type": str(data.get("mime_type") or "")[:80],
+        "monitor": monitor if isinstance(monitor, str) and monitor in {"running", "unavailable"} else "unavailable",
+        "last_signal_sec": seconds(data.get("last_signal_sec")),
+        "longest_no_signal_sec": seconds(data.get("longest_no_signal_sec")),
+        "events": events,
+    }
+    return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+
+
 def _remove_consultation_files(consultation_id: str, audio_path: Path, settings_audio_dir: Path) -> None:
     id_dir = settings_audio_dir / consultation_id
     if id_dir.is_dir():
@@ -125,6 +172,7 @@ async def upload_consultation(
     patient_gender: str | None = Form(None),
     patient_phones_json: str | None = Form(None),
     patient_emails_json: str | None = Form(None),
+    recording_diagnostics_json: str | None = Form(None),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -198,6 +246,7 @@ async def upload_consultation(
         patient_name=normalized_patient_name,
         audio_path=str(dest_path),
         original_filename=file.filename,
+        recording_diagnostics_json=_normalize_recording_diagnostics(recording_diagnostics_json),
         audio_size_bytes=actual_bytes,
         status="uploaded",
     )
@@ -407,6 +456,8 @@ def get_consultation(
         overall_score=row.overall_score,
         status=row.status,
         error_message=_admin_error_message(row, user["role"]),
+        recording_diagnostics=(json.loads(row.recording_diagnostics_json)
+                               if user["role"] == "admin" and row.recording_diagnostics_json else None),
         processing_stage=row.processing_stage if user["role"] == "admin" else None,
         speechkit_operation_id=row.speechkit_operation_id if user["role"] == "admin" else None,
         retry_available=(user["role"] == "admin" and row.status == "failed"

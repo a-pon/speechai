@@ -8,6 +8,7 @@ const recordStartButton = document.getElementById("record-start-button");
 const recordPauseButton = document.getElementById("record-pause-button");
 const recordStopButton = document.getElementById("record-stop-button");
 const recordStatus = document.getElementById("record-status");
+const recordDevice = document.getElementById("record-device");
 const recordTimer = document.getElementById("record-timer");
 const uploadForm = document.getElementById("upload-form");
 const uploadStatus = document.getElementById("upload-status");
@@ -40,6 +41,14 @@ let recordStartedAt = 0;
 let recordElapsedMs = 0;
 let recordTimerHandle = null;
 let recordAutoStopHandle = null;
+let recordMicTrack = null;
+let recordAudioContext = null;
+let recordAnalyser = null;
+let recordSignalTimer = null;
+let recordSignalData = null;
+let recordSilentSince = null;
+let recordDiagnostics = null;
+let recordStopRequested = false;
 
 let recordMaxDurationMs = 90 * 60 * 1000;
 const RECORD_COORDINATION_KEY = "speechai-recording-event";
@@ -281,6 +290,7 @@ function handleRecordingEvent(message) {
 
 function setRecordUi(state) {
   if (!recordingPanel) return;
+  recordStatus.classList.remove("record-warning");
   if (state === "idle") {
     recordStatus.textContent = "Микрофон не используется.";
     recordTimer.hidden = true;
@@ -364,10 +374,27 @@ function syncWorkspaceVisibility() {
 function cleanupRecording() {
   stopRecordTimer();
   stopRecordAutoStop();
+  if (recordSignalTimer) clearInterval(recordSignalTimer);
+  recordSignalTimer = null;
+  recordAnalyser = null;
+  recordSignalData = null;
+  recordSilentSince = null;
+  void recordAudioContext?.close().catch(() => {});
+  recordAudioContext = null;
+  if (recordMicTrack) {
+    recordMicTrack.onmute = null;
+    recordMicTrack.onunmute = null;
+    recordMicTrack.onended = null;
+    recordMicTrack = null;
+  }
   recordStartedAt = 0;
   recordElapsedMs = 0;
   recordChunks = [];
   recordRecorder = null;
+  recordDiagnostics = null;
+  recordStopRequested = false;
+  recordDevice.hidden = true;
+  recordDevice.textContent = "";
   if (recordStream) {
     recordStream.getTracks().forEach((track) => track.stop());
     recordStream = null;
@@ -380,11 +407,104 @@ function getPreferredMimeType() {
   return candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
 }
 
-async function sendRecordedAudio(blob, ext) {
+function recordingElapsedSeconds() {
+  return (recordElapsedMs + (recordStartedAt ? Date.now() - recordStartedAt : 0)) / 1000;
+}
+
+function recordCaptureEvent(type) {
+  if (recordDiagnostics && recordDiagnostics.events.length < 20) {
+    recordDiagnostics.events.push({ type, at_sec: Math.round(recordingElapsedSeconds() * 10) / 10 });
+  }
+}
+
+function pollMicrophoneSignal() {
+  if (!recordAnalyser || !recordDiagnostics || recordRecorder?.state !== "recording") {
+    recordSilentSince = null;
+    return;
+  }
+  if (recordAudioContext?.state !== "running") return;
+  recordDiagnostics.monitor = "running";
+  recordAnalyser.getFloatTimeDomainData(recordSignalData);
+  let sum = 0;
+  for (const value of recordSignalData) sum += value * value;
+  const rms = Math.sqrt(sum / recordSignalData.length);
+  const elapsed = recordingElapsedSeconds();
+  if (rms > 0.0018) {
+    recordDiagnostics.last_signal_sec = Math.round(elapsed * 10) / 10;
+    recordSilentSince = null;
+    if (!recordMicTrack?.muted) {
+      recordStatus.classList.remove("record-warning");
+      recordStatus.textContent = "Запись идёт. Звук поступает.";
+    }
+  } else {
+    if (recordSilentSince == null) recordSilentSince = elapsed;
+    const quietSeconds = elapsed - recordSilentSince;
+    recordDiagnostics.longest_no_signal_sec = Math.max(
+      recordDiagnostics.longest_no_signal_sec, Math.round(quietSeconds));
+    if (quietSeconds >= 60) {
+      recordStatus.classList.add("record-warning");
+      recordStatus.textContent = "Звук с микрофона не поступает больше минуты. Проверьте микрофон и запись.";
+    }
+  }
+}
+
+function monitorMicrophone() {
+  recordMicTrack = recordStream.getAudioTracks()[0] || null;
+  recordDiagnostics = {
+    version: 1,
+    device_label: recordMicTrack?.label || "",
+    mime_type: recordRecorder?.mimeType || "",
+    monitor: "unavailable",
+    last_signal_sec: null,
+    longest_no_signal_sec: 0,
+    events: [],
+  };
+  if (recordMicTrack) {
+    recordDevice.textContent = `Микрофон: ${recordMicTrack.label || "устройство по умолчанию"}`;
+    recordDevice.hidden = false;
+    recordMicTrack.onmute = () => {
+      recordCaptureEvent("mute");
+      recordStatus.classList.add("record-warning");
+      recordStatus.textContent = "Микрофон перестал передавать звук. Проверьте устройство.";
+    };
+    recordMicTrack.onunmute = () => {
+      recordCaptureEvent("unmute");
+      recordStatus.classList.remove("record-warning");
+      recordStatus.textContent = "Микрофон снова доступен. Проверьте, что звук поступает.";
+    };
+    recordMicTrack.onended = () => {
+      recordCaptureEvent("ended");
+      uploadStatus.textContent = "Микрофон отключился. Сохраняем полученную часть записи.";
+      stopRecording();
+    };
+    if (recordMicTrack.muted) recordMicTrack.onmute();
+  }
+  const AudioContextType = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextType) return;
+  try {
+    recordAudioContext = new AudioContextType();
+    const source = recordAudioContext.createMediaStreamSource(recordStream);
+    recordAnalyser = recordAudioContext.createAnalyser();
+    recordAnalyser.fftSize = 2048;
+    recordSignalData = new Float32Array(recordAnalyser.fftSize);
+    source.connect(recordAnalyser);
+    const silentOutput = recordAudioContext.createGain();
+    silentOutput.gain.value = 0;
+    recordAnalyser.connect(silentOutput);
+    silentOutput.connect(recordAudioContext.destination);
+    void recordAudioContext.resume().catch(() => {});
+    recordSignalTimer = setInterval(pollMicrophoneSignal, 1000);
+  } catch {
+    recordDiagnostics.monitor = "unavailable";
+  }
+}
+
+async function sendRecordedAudio(blob, ext, diagnostics) {
   setRecordUi("busy");
   try {
     const fd = buildUploadFormData({ requireFile: false });
     fd.set("file", new File([blob], `consultation.${ext}`, { type: blob.type || "application/octet-stream" }));
+    if (diagnostics) fd.set("recording_diagnostics_json", JSON.stringify(diagnostics));
     const res = await apiFetch("/api/consultations/upload", { method: "POST", body: fd });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -395,12 +515,7 @@ async function sendRecordedAudio(blob, ext) {
     window.location.href = `/record/${data.id}`;
   } catch (err) {
     uploadStatus.textContent = "Ошибка: " + formatErrorMessage(err, "Не удалось отправить запись");
-    setRecordUi("idle");
-    if (recordStream) {
-      recordStream.getTracks().forEach((track) => track.stop());
-      recordStream = null;
-    }
-    recordRecorder = null;
+    cleanupRecording();
   }
 }
 
@@ -425,6 +540,13 @@ async function startRecording() {
       }
     };
     recordRecorder.onstop = () => {
+      if (!recordStopRequested) recordCaptureEvent("unexpected_stop");
+      if (recordSilentSince != null && recordDiagnostics) {
+        recordDiagnostics.longest_no_signal_sec = Math.max(
+          recordDiagnostics.longest_no_signal_sec,
+          Math.round(recordingElapsedSeconds() - recordSilentSince));
+      }
+      const diagnostics = recordDiagnostics;
       if (!recordChunks.length) {
         uploadStatus.textContent = "Ошибка: запись не содержит аудиоданных.";
         cleanupRecording();
@@ -432,7 +554,12 @@ async function startRecording() {
       }
       const blob = new Blob(recordChunks, { type: recordRecorder?.mimeType || "audio/webm" });
       const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
-      void sendRecordedAudio(blob, ext);
+      void sendRecordedAudio(blob, ext, diagnostics);
+    };
+    recordRecorder.onerror = () => {
+      recordCaptureEvent("recorder_error");
+      uploadStatus.textContent = "Сбой записи в браузере. Сохраняем полученную часть.";
+      stopRecording();
     };
     recordRecorder.start(1000);
     recordElapsedMs = 0;
@@ -442,6 +569,7 @@ async function startRecording() {
     recordTimerHandle = setInterval(updateRecordTimer, 1000);
     scheduleRecordAutoStop();
     setRecordUi("recording");
+    monitorMicrophone();
   } catch (err) {
     cleanupRecording();
     uploadStatus.textContent = "Ошибка: нет доступа к микрофону или он занят. " + formatErrorMessage(err, "");
@@ -463,11 +591,16 @@ function togglePauseRecording() {
     recordTimerHandle = setInterval(updateRecordTimer, 1000);
     scheduleRecordAutoStop();
     setRecordUi("recording");
+    if (recordMicTrack?.muted) {
+      recordStatus.classList.add("record-warning");
+      recordStatus.textContent = "Микрофон не передаёт звук. Проверьте устройство.";
+    }
   }
 }
 
 function stopRecording() {
   if (!recordRecorder || recordRecorder.state === "inactive") return;
+  recordStopRequested = true;
   if (recordRecorder.state === "recording") {
     recordElapsedMs += Date.now() - recordStartedAt;
     recordStartedAt = 0;
